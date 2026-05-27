@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import type { DailyUsage } from "./usage.js";
+import type { DailyUsage } from "./usage";
 
 export interface CollectOpenclawUsageOpts {
   sinceDateStr: string;
