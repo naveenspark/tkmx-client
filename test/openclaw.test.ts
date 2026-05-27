@@ -143,3 +143,49 @@ test("aggregateRecords returns rows sorted by date ascending", () => {
   ]);
   assert.deepEqual(result.map((r) => r.date), ["2026-05-25", "2026-05-26", "2026-05-27"]);
 });
+
+test("collectOpenclawUsage aggregates across multiple roots, dedupes by responseId across roots, ignores trajectory + sessions.json", async () => {
+  const result = await collectOpenclawUsage({
+    sinceDateStr: "2026-05-01",
+    sessionsDirs: [
+      path.join(FIXTURES, "root-a"),
+      path.join(FIXTURES, "root-b"),
+    ],
+  });
+  assert.equal(result.length, 2);
+  const day25 = result.find((d) => d.date === "2026-05-25")!;
+  const sonnet = day25.modelBreakdowns.find((m) => m.modelName === "anthropic/claude-sonnet-4-6")!;
+  // resp-abc-1 appears in 3 places (root-a/abc, root-a/def.checkpoint, root-b/ghi) — counted once.
+  // resp-def-1 (only in root-a) — counted once.
+  assert.equal(sonnet.inputTokens, 150);
+  assert.equal(sonnet.outputTokens, 15);
+  assert.equal(sonnet.totalTokens, 165);
+  assert.equal(sonnet.source, "openclaw");
+  const day26 = result.find((d) => d.date === "2026-05-26")!;
+  assert.equal(day26.modelBreakdowns[0].modelName, "anthropic/claude-opus-4-7");
+  assert.equal(day26.modelBreakdowns[0].totalTokens, 220);
+});
+
+test("collectOpenclawUsage filters out days strictly before sinceDateStr", async () => {
+  const result = await collectOpenclawUsage({
+    sinceDateStr: "2026-05-26",
+    sessionsDirs: [
+      path.join(FIXTURES, "root-a"),
+      path.join(FIXTURES, "root-b"),
+    ],
+  });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].date, "2026-05-26");
+});
+
+test("collectOpenclawUsage skips a missing root in a list of roots without failing", async () => {
+  const result = await collectOpenclawUsage({
+    sinceDateStr: "2026-05-01",
+    sessionsDirs: [
+      path.join(FIXTURES, "does-not-exist"),
+      path.join(FIXTURES, "root-b"),
+    ],
+  });
+  // root-b alone: resp-abc-1 (deduped) and resp-ghi-1
+  assert.equal(result.length, 2);
+});

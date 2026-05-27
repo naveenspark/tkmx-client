@@ -1,4 +1,4 @@
-import { readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
 export interface OpenclawUsageRecord {
@@ -84,7 +84,7 @@ export async function collectOpenclawUsage(
   opts: CollectOpenclawUsageOpts,
 ): Promise<DailyUsage[]> {
   if (opts.sessionsDirs.length === 0) return [];
-  let anySessionFiles = false;
+  const records: OpenclawUsageRecord[] = [];
   for (const dir of opts.sessionsDirs) {
     let entries: string[];
     try {
@@ -93,18 +93,25 @@ export async function collectOpenclawUsage(
       if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw err;
     }
-    if (
-      entries.some(
-        (n) =>
-          n.endsWith(".jsonl") &&
-          !n.endsWith(".trajectory.jsonl") &&
-          n !== "sessions.json",
-      )
-    ) {
-      anySessionFiles = true;
-      break;
+    const sessionFiles = entries.filter(
+      (name) =>
+        name.endsWith(".jsonl") &&
+        !name.endsWith(".trajectory.jsonl") &&
+        name !== "sessions.json",
+    );
+    for (const name of sessionFiles) {
+      let contents: string;
+      try {
+        contents = await readFile(`${dir}/${name}`, "utf8");
+      } catch {
+        continue;
+      }
+      for (const line of contents.split("\n")) {
+        if (!line.trim()) continue;
+        const r = parseUsageLine(line);
+        if (r && r.date >= opts.sinceDateStr) records.push(r);
+      }
     }
   }
-  if (!anySessionFiles) return [];
-  return []; // full pipeline added in Task 4
+  return aggregateRecords(records);
 }
