@@ -1,4 +1,4 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
 export interface OpenclawUsageRecord {
@@ -45,6 +45,45 @@ export function parseUsageLine(line: string): OpenclawUsageRecord | null {
 }
 
 export const OPENCLAW_SOURCE = "openclaw";
+
+const STANDALONE_REL = ".openclaw/agents/main/sessions";
+const PLOW_REL_TAIL = "openclaw/gateway/agents/main/sessions";
+
+async function exists(p: string): Promise<boolean> {
+  try { await stat(p); return true; } catch { return false; }
+}
+
+export interface DiscoverOpts {
+  env: NodeJS.ProcessEnv;
+  homeDir: string;
+  platform: NodeJS.Platform;
+}
+
+export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<string[]> {
+  const override = opts.env.OPENCLAW_SESSIONS_DIRS;
+  if (override && override.trim().length > 0) {
+    return override.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  }
+  const candidates: string[] = [];
+  candidates.push(`${opts.homeDir}/${STANDALONE_REL}`);
+  if (opts.platform === "darwin") {
+    const appSupport = `${opts.homeDir}/Library/Application Support`;
+    let entries: string[] = [];
+    try { entries = await readdir(appSupport); } catch { entries = []; }
+    for (const name of entries) {
+      // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
+      if (name === "co.plow.app" || name.startsWith("co.plow.app.")) {
+        candidates.push(`${appSupport}/${name}/${PLOW_REL_TAIL}`);
+      }
+    }
+  }
+  // Linux/Windows: standalone path only — Plow is macOS-only.
+  const present: string[] = [];
+  for (const c of candidates) {
+    if (await exists(c)) present.push(c);
+  }
+  return present;
+}
 
 export function aggregateRecords(records: OpenclawUsageRecord[]): DailyUsage[] {
   const seen = new Set<string>();

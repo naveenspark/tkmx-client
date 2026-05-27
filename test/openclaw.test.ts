@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { collectOpenclawUsage, parseUsageLine, aggregateRecords } from "../reporter/openclaw";
+import { collectOpenclawUsage, parseUsageLine, aggregateRecords, discoverOpenclawSessionsDirs } from "../reporter/openclaw";
 
 const FIXTURES = path.join(__dirname, "fixtures", "openclaw");
 
@@ -188,4 +188,46 @@ test("collectOpenclawUsage skips a missing root in a list of roots without faili
   });
   // root-b alone: resp-abc-1 (deduped) and resp-ghi-1
   assert.equal(result.length, 2);
+});
+
+const DISCOVERY_HOME = path.join(FIXTURES, "discovery", "home");
+
+test("discoverOpenclawSessionsDirs returns standalone + every plow variant on macOS", async () => {
+  const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: DISCOVERY_HOME, platform: "darwin" });
+  const rel = result.map((p) => p.slice(DISCOVERY_HOME.length + 1)).sort();
+  assert.deepEqual(rel, [
+    ".openclaw/agents/main/sessions",
+    "Library/Application Support/co.plow.app.dev.wt1/openclaw/gateway/agents/main/sessions",
+    "Library/Application Support/co.plow.app.wt1/openclaw/gateway/agents/main/sessions",
+    "Library/Application Support/co.plow.app/openclaw/gateway/agents/main/sessions",
+  ].sort());
+});
+
+test("discoverOpenclawSessionsDirs returns only roots that exist (skips missing)", async () => {
+  const emptyHome = path.join(FIXTURES, "empty-root");
+  const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: emptyHome, platform: "darwin" });
+  assert.deepEqual(result, []);
+});
+
+test("discoverOpenclawSessionsDirs honors OPENCLAW_SESSIONS_DIRS env (comma-separated, overrides probe)", async () => {
+  const result = await discoverOpenclawSessionsDirs({
+    env: { OPENCLAW_SESSIONS_DIRS: "/tmp/foo,/tmp/bar" },
+    homeDir: DISCOVERY_HOME,
+    platform: "darwin",
+  });
+  assert.deepEqual(result, ["/tmp/foo", "/tmp/bar"]);
+});
+
+test("discoverOpenclawSessionsDirs trims whitespace and ignores empty entries in env override", async () => {
+  const result = await discoverOpenclawSessionsDirs({
+    env: { OPENCLAW_SESSIONS_DIRS: "  /tmp/a , ,/tmp/b  ," },
+    homeDir: DISCOVERY_HOME,
+    platform: "darwin",
+  });
+  assert.deepEqual(result, ["/tmp/a", "/tmp/b"]);
+});
+
+test("discoverOpenclawSessionsDirs returns just standalone path on non-darwin platforms", async () => {
+  const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: DISCOVERY_HOME, platform: "linux" });
+  assert.deepEqual(result, [path.join(DISCOVERY_HOME, ".openclaw/agents/main/sessions")]);
 });
