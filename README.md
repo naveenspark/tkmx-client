@@ -89,6 +89,7 @@ cp .env.example .env
 | `ABOUT` | No | The main content of your profile — describe your setup, link to tools you use, share blog posts/videos about your workflow. URLs are auto-linked. See [Profile Page](#profile-page) |
 | `DEMO_VIDEO_URL` | No | YouTube URL (**3 min or shorter**) showing your before/after AI coding workflow. Embedded on your profile page under "3-MIN DEMO VIDEO". |
 | `HN_USERNAME` | No | Your Hacker News username (e.g. `Sam_Odio`). Required to appear on the leaderboard — see [HN Verification](#appearing-on-the-leaderboard-hn-verification) |
+| `OPENCLAW_SESSIONS_DIRS` | No | Override OpenClaw auto-discovery with a comma-separated list of session directories. Defaults to auto-discovery of standalone + Plow variants on macOS. See [OpenClaw Usage](#openclaw-usage). |
 | `REPORT_DAYS` | No | Days of history to report (default: `28`). See [Backfill & Optimization](#backfill--optimization) |
 | `REPORT_MACHINE_CONFIG` | No | Set to `true` to share machine info (OS, CPU, memory, installed skills, MCP servers, hooks, CLAUDE.md stats, shell/editor) on your profile. No prompts, code, or keys are ever sent. |
 | `REPORT_DEV_STATS` | No | Set to `true` to share how you code — tool-call frequencies, session stats, cache efficiency, git outcome metrics (commits/LOC/PRs), and Cursor AI attribution. No file paths, prompts, or code are ever sent. See [Dev Stats](#dev-stats). |
@@ -229,6 +230,25 @@ If you make OpenAI API calls directly (not through Codex CLI), you can pull toke
 The client only *reads* usage data; it never sends your admin key anywhere except `api.openai.com`. Reports use the `/v1/organization/usage/completions` endpoint, which covers chat completions and the Responses API — essentially all OpenAI token volume for most users.
 
 > **⚠️ Don't double-count Codex CLI:** If your Codex CLI is authenticated with an OpenAI API key (rather than a ChatGPT Plus/Pro subscription), its traffic already appears in platform usage. Enabling `OPENAI_ADMIN_KEY` alongside Codex collection will double-count those tokens. Leave `OPENAI_ADMIN_KEY` unset if Codex is on API-key auth.
+
+## OpenClaw Usage
+
+If you run [OpenClaw](https://openclaw.ai) sessions locally — standalone or wrapped by [Plow](https://plow.co) on macOS — token usage is read directly from session JSONL transcripts and merged into your reports under the `openclaw` source. No setup required: the reporter auto-discovers session directories on each run.
+
+**Discovery paths (macOS):**
+
+- Standalone install: `~/.openclaw/agents/main/sessions/`
+- Plow (any variant): `~/Library/Application Support/co.plow.app*/openclaw/gateway/agents/main/sessions/` — picks up `co.plow.app`, `co.plow.app.dev`, `co.plow.app.wt1`, dev/worktree variants, etc.
+
+**Other platforms:** Only the standalone path is probed. Plow is macOS-only.
+
+To point the reporter at non-default install locations (or to scope reporting to a subset of installs), set `OPENCLAW_SESSIONS_DIRS` in `.env` to one or more sessions directories, comma-separated:
+
+```
+OPENCLAW_SESSIONS_DIRS=/custom/path/agents/main/sessions,/another/path/agents/main/sessions
+```
+
+The override replaces the auto-discovered list entirely. Each directory is scanned for `*.jsonl` files; `*.trajectory.jsonl` and `sessions.json` are ignored. Cross-file and cross-root duplicates are deduped by each LLM call's `responseId`, so running multiple Plow variants that share OpenClaw data won't double-count.
 
 ## Profile Page
 
