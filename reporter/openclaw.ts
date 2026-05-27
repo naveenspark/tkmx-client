@@ -1,6 +1,49 @@
 import { readdir } from "node:fs/promises";
 import type { DailyUsage } from "./usage";
 
+export interface OpenclawUsageRecord {
+  date: string;
+  modelName: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  totalTokens: number;
+  responseId: string;
+}
+
+function toIsoDate(input: string | number | undefined): string | null {
+  if (input === undefined) return null;
+  const d = new Date(input);
+  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+export function parseUsageLine(line: string): OpenclawUsageRecord | null {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let obj: any;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (obj?.type !== "message") return null;
+  const msg = obj.message;
+  if (msg?.role !== "assistant") return null;
+  if (!msg.usage || !msg.model || !msg.responseId) return null;
+  const date = toIsoDate(obj.timestamp) ?? toIsoDate(msg.timestamp);
+  if (!date) return null;
+  return {
+    date,
+    modelName: String(msg.model),
+    inputTokens: Number(msg.usage.input ?? 0),
+    outputTokens: Number(msg.usage.output ?? 0),
+    cacheReadTokens: Number(msg.usage.cacheRead ?? 0),
+    cacheCreationTokens: Number(msg.usage.cacheWrite ?? 0),
+    totalTokens: Number(msg.usage.totalTokens ?? 0),
+    responseId: String(msg.responseId),
+  };
+}
+
 export interface CollectOpenclawUsageOpts {
   sinceDateStr: string;
   /** Each entry is a sessions dir (e.g. `<root>/agents/main/sessions`). All are scanned and aggregated together. */
