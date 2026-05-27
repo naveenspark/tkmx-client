@@ -178,6 +178,25 @@ test("collectOpenclawUsage filters out days strictly before sinceDateStr", async
   assert.equal(result[0].date, "2026-05-26");
 });
 
+test("collectOpenclawUsage accepts YYYYMMDD sinceDateStr (matches production formatSinceStr output)", async () => {
+  // Production passes the YYYYMMDD string from reporter/window.ts::formatSinceStr.
+  // r.date is YYYY-MM-DD (ISO from toISOString), so the collector must normalize
+  // sinceDateStr before comparing. Without normalization, `"2026-05-25" >= "20260526"`
+  // is always false (hyphen 45 < digit 48), silently dropping every record.
+  const includes26 = await collectOpenclawUsage({
+    sinceDateStr: "20260526",
+    sessionsDirs: [path.join(FIXTURES, "root-a"), path.join(FIXTURES, "root-b")],
+  });
+  assert.equal(includes26.length, 1);
+  assert.equal(includes26[0].date, "2026-05-26");
+
+  const includesBoth = await collectOpenclawUsage({
+    sinceDateStr: "20260501",
+    sessionsDirs: [path.join(FIXTURES, "root-a"), path.join(FIXTURES, "root-b")],
+  });
+  assert.equal(includesBoth.length, 2);
+});
+
 test("collectOpenclawUsage skips a missing root in a list of roots without failing", async () => {
   const result = await collectOpenclawUsage({
     sinceDateStr: "2026-05-01",

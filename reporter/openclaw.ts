@@ -123,6 +123,13 @@ export async function collectOpenclawUsage(
   opts: CollectOpenclawUsageOpts,
 ): Promise<DailyUsage[]> {
   if (opts.sessionsDirs.length === 0) return [];
+  // Normalize sinceDateStr to YYYY-MM-DD so the >= compare against r.date
+  // works regardless of whether the caller passed YYYYMMDD (production —
+  // formatSinceStr in window.ts) or YYYY-MM-DD (unit tests).
+  const sinceIso =
+    /^\d{8}$/.test(opts.sinceDateStr)
+      ? `${opts.sinceDateStr.slice(0, 4)}-${opts.sinceDateStr.slice(4, 6)}-${opts.sinceDateStr.slice(6, 8)}`
+      : opts.sinceDateStr;
   const records: OpenclawUsageRecord[] = [];
   for (const dir of opts.sessionsDirs) {
     let entries: string[];
@@ -148,7 +155,7 @@ export async function collectOpenclawUsage(
       for (const line of contents.split("\n")) {
         if (!line.trim()) continue;
         const r = parseUsageLine(line);
-        if (r && r.date >= opts.sinceDateStr) records.push(r);
+        if (r && r.date >= sinceIso) records.push(r);
       }
     }
   }
