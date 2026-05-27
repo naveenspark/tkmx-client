@@ -4,3 +4,5 @@ node_modules/
 .reporting-state.json
 dist/
 *.tsbuildinfo
+memory/
+docs/superpowers/plans/
