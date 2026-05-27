@@ -1,5 +1,0 @@
-- [Test with production inputs](feedback_test_with_production_inputs.md) — collector tests must use the exact format the call site passes; "close enough" hides format-mismatch bugs that fail silently in prod
-- [Portable source design](feedback_portable_sources.md) — new tkmx sources name the agent (e.g. "openclaw"), not the host (e.g. "plow"); discover via multi-root probe + env override
-- [Plow file taxonomy](reference_plow_taxonomy.md) — `~/Hacking/plow/docs/architecture/file-taxonomy.md` classifies plow paths as upstream/wrapper/user-state; check before designing plow-adjacent reads
-- [OpenClaw vs Plow architecture](project_plow_architecture.md) — OpenClaw is the agent (upstream), Plow is one host that wraps it; tkmx attributes to agent, scans all known wrapper roots
-- [Plow is macOS-only](project_plow_macos_only.md) — gate plow-wrapper path probes on `process.platform === "darwin"`; don't add Linux/Windows branches for plow
