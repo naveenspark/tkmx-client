@@ -15,7 +15,17 @@ export interface OpenclawUsageRecord {
 function toIsoDate(input: string | number | undefined): string | null {
   if (input === undefined) return null;
   const d = new Date(input);
-  return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  if (isNaN(d.getTime())) return null;
+  // Local calendar date (mirrors reporter/openai.ts:97) so openclaw rows
+  // bucket on the same day as claude/codex rows — a UTC date would split
+  // a single user-perceived day across two buckets near local midnight.
+  return (
+    d.getFullYear() +
+    "-" +
+    String(d.getMonth() + 1).padStart(2, "0") +
+    "-" +
+    String(d.getDate()).padStart(2, "0")
+  );
 }
 
 export function parseUsageLine(line: string): OpenclawUsageRecord | null {
@@ -132,13 +142,11 @@ export async function collectOpenclawUsage(
       : opts.sinceDateStr;
   const records: OpenclawUsageRecord[] = [];
   for (const dir of opts.sessionsDirs) {
-    let entries: string[];
-    try {
-      entries = await readdir(dir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw err;
-    }
+    // Fail loud on ENOENT / read errors — discoverOpenclawSessionsDirs has
+    // already filtered to dirs that exist, so a missing dir here means
+    // either a user-typo'd OPENCLAW_SESSIONS_DIRS or a real FS issue. Silent
+    // skip would silently undercount; an exception surfaces the cause.
+    const entries = await readdir(dir);
     const sessionFiles = entries.filter(
       (name) =>
         name.endsWith(".jsonl") &&
@@ -146,12 +154,7 @@ export async function collectOpenclawUsage(
         name !== "sessions.json",
     );
     for (const name of sessionFiles) {
-      let contents: string;
-      try {
-        contents = await readFile(`${dir}/${name}`, "utf8");
-      } catch {
-        continue;
-      }
+      const contents = await readFile(`${dir}/${name}`, "utf8");
       for (const line of contents.split("\n")) {
         if (!line.trim()) continue;
         const r = parseUsageLine(line);

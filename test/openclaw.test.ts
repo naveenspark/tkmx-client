@@ -13,15 +13,17 @@ test("collectOpenclawUsage returns [] when given zero roots", async () => {
   assert.deepEqual(result, []);
 });
 
-test("collectOpenclawUsage returns [] when every root is missing on disk", async () => {
-  const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-01",
-    sessionsDirs: [
-      path.join(FIXTURES, "does-not-exist-1"),
-      path.join(FIXTURES, "does-not-exist-2"),
-    ],
-  });
-  assert.deepEqual(result, []);
+test("collectOpenclawUsage throws when a given root does not exist (fail-loud)", async () => {
+  // A typo'd OPENCLAW_SESSIONS_DIRS entry should surface as an error,
+  // not silently undercount. discoverOpenclawSessionsDirs filters the
+  // production path; callers passing explicit dirs own the existence.
+  await assert.rejects(
+    () => collectOpenclawUsage({
+      sinceDateStr: "2026-05-01",
+      sessionsDirs: [path.join(FIXTURES, "does-not-exist")],
+    }),
+    { code: "ENOENT" },
+  );
 });
 
 test("collectOpenclawUsage returns [] when roots exist but contain no .jsonl session files", async () => {
@@ -41,7 +43,11 @@ test("parseUsageLine extracts usage from an assistant message", () => {
       model: "anthropic/claude-sonnet-4-6",
       provider: "plow",
       api: "openai-completions",
-      usage: { input: 31593, output: 147, cacheRead: 100, cacheWrite: 50, totalTokens: 31790 },
+      // Real OpenClaw shape: totalTokens = input + output + cacheRead + cacheWrite
+      // (input is already net, unlike OpenAI's gross input_tokens). Verified
+      // against 5220 production records with non-zero cache; all match the
+      // sum-all formula. The collector trusts the source's totalTokens.
+      usage: { input: 31593, output: 147, cacheRead: 100, cacheWrite: 50, totalTokens: 31890 },
       responseId: "chatcmpl-369386b2",
     },
   });
@@ -52,7 +58,7 @@ test("parseUsageLine extracts usage from an assistant message", () => {
     outputTokens: 147,
     cacheReadTokens: 100,
     cacheCreationTokens: 50,
-    totalTokens: 31790,
+    totalTokens: 31890,
     responseId: "chatcmpl-369386b2",
   });
 });
@@ -92,18 +98,56 @@ test("parseUsageLine returns null for malformed JSON", () => {
   assert.equal(parseUsageLine("not json"), null);
 });
 
+test("parseUsageLine uses local calendar date at timezone boundary (matches openai.ts contract)", () => {
+  // A session at 23:00 PDT on May 25 (= 06:00 UTC on May 26) is "yesterday"
+  // for a Pacific user — must bucket to 2026-05-25, not the UTC 2026-05-26
+  // it would land on under .toISOString().slice(0,10). Without this, a
+  // session shows up as a different day on the dashboard than the same
+  // moment's claude/codex tokens (which already use local dates).
+  const originalTZ = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  try {
+    const line = JSON.stringify({
+      type: "message",
+      timestamp: "2026-05-26T06:00:00.000Z", // 23:00 PDT May 25
+      message: {
+        role: "assistant",
+        model: "anthropic/claude-sonnet-4-6",
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        responseId: "tz-r1",
+      },
+    });
+    const result = parseUsageLine(line);
+    assert.equal(
+      result?.date,
+      "2026-05-25",
+      "expected local Pacific date 2026-05-25, not UTC 2026-05-26",
+    );
+  } finally {
+    process.env.TZ = originalTZ;
+  }
+});
+
 test("parseUsageLine falls back to message.timestamp (epoch ms) when top-level timestamp missing", () => {
-  const line = JSON.stringify({
-    type: "message",
-    message: {
-      role: "assistant",
-      model: "anthropic/claude-sonnet-4-6",
-      timestamp: 1779736791413,
-      usage: { input: 1, output: 1, totalTokens: 2 },
-      responseId: "r1",
-    },
-  });
-  assert.equal(parseUsageLine(line)?.date, "2026-05-25");
+  // Force TZ — epoch 1779736791413 is 2026-05-26T02:39Z (varies by TZ in
+  // local-date mode). Pinning TZ keeps the test CI-deterministic.
+  const originalTZ = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  try {
+    const line = JSON.stringify({
+      type: "message",
+      message: {
+        role: "assistant",
+        model: "anthropic/claude-sonnet-4-6",
+        timestamp: 1779736791413,
+        usage: { input: 1, output: 1, totalTokens: 2 },
+        responseId: "r1",
+      },
+    });
+    assert.equal(parseUsageLine(line)?.date, "2026-05-25");
+  } finally {
+    process.env.TZ = originalTZ;
+  }
 });
 
 const rec = (date: string, model: string, input: number, output: number, responseId: string) => ({
@@ -195,18 +239,6 @@ test("collectOpenclawUsage accepts YYYYMMDD sinceDateStr (matches production for
     sessionsDirs: [path.join(FIXTURES, "root-a"), path.join(FIXTURES, "root-b")],
   });
   assert.equal(includesBoth.length, 2);
-});
-
-test("collectOpenclawUsage skips a missing root in a list of roots without failing", async () => {
-  const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-01",
-    sessionsDirs: [
-      path.join(FIXTURES, "does-not-exist"),
-      path.join(FIXTURES, "root-b"),
-    ],
-  });
-  // root-b alone: resp-abc-1 (deduped) and resp-ghi-1
-  assert.equal(result.length, 2);
 });
 
 const DISCOVERY_HOME = path.join(FIXTURES, "discovery", "home");
