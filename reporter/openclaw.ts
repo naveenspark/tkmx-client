@@ -1,5 +1,6 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import type { DailyUsage, ModelBreakdown } from "./usage";
+import type { DailyUsage } from "./usage";
+import { mergeDailyUsage } from "./merge";
 
 export interface OpenclawUsageRecord {
   date: string;
@@ -96,31 +97,28 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
 }
 
 export function aggregateRecords(records: OpenclawUsageRecord[]): DailyUsage[] {
+  // Dedupe by responseId (the unique-per-LLM-call key — handles checkpoint
+  // forks and cross-root dupes), then let mergeDailyUsage do the
+  // (date, modelName, source) summing it already owns for every other source.
   const seen = new Set<string>();
-  const byDate = new Map<string, Map<string, ModelBreakdown>>();
+  const rows: DailyUsage[] = [];
   for (const rec of records) {
     if (seen.has(rec.responseId)) continue;
     seen.add(rec.responseId);
-    let dayModels = byDate.get(rec.date);
-    if (!dayModels) { dayModels = new Map(); byDate.set(rec.date, dayModels); }
-    let mb = dayModels.get(rec.modelName);
-    if (!mb) {
-      mb = {
-        modelName: rec.modelName, inputTokens: 0, outputTokens: 0,
-        cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0,
+    rows.push({
+      date: rec.date,
+      modelBreakdowns: [{
+        modelName: rec.modelName,
+        inputTokens: rec.inputTokens,
+        outputTokens: rec.outputTokens,
+        cacheCreationTokens: rec.cacheCreationTokens,
+        cacheReadTokens: rec.cacheReadTokens,
+        totalTokens: rec.totalTokens,
         source: OPENCLAW_SOURCE,
-      };
-      dayModels.set(rec.modelName, mb);
-    }
-    mb.inputTokens += rec.inputTokens;
-    mb.outputTokens += rec.outputTokens;
-    mb.cacheReadTokens += rec.cacheReadTokens;
-    mb.cacheCreationTokens += rec.cacheCreationTokens;
-    mb.totalTokens += rec.totalTokens;
+      }],
+    });
   }
-  return [...byDate.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([date, models]) => ({ date, modelBreakdowns: [...models.values()] }));
+  return mergeDailyUsage(rows);
 }
 
 export interface CollectOpenclawUsageOpts {

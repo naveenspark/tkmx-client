@@ -110,7 +110,7 @@ npm run report
 
 A `CLIENT_ID` is auto-generated on first run and saved to `.env`. This identifies your machine so multiple machines can report for the same username without overwriting each other.
 
-> **⚠ Don't touch `CLIENT_ID` once it's set.** Usage rows are keyed on `(username, date, model, client_id)` server-side. If you delete `.env`, re-clone into a new directory, or paste a fresh `.env` that omits the line, a new id is generated and the server treats your machine as brand new — the old id's rows stay behind and every overlapping date gets double-counted on your profile. When updating, always `git pull` in place rather than re-cloning. If you must re-clone, copy `CLIENT_ID` from the old `.env` first.
+> **⚠ Don't touch `CLIENT_ID` once it's set.** Usage rows are keyed on `(username, date, model, client_id, source)` server-side. If you delete `.env`, re-clone into a new directory, or paste a fresh `.env` that omits the line, a new id is generated and the server treats your machine as brand new — the old id's rows stay behind and every overlapping date gets double-counted on your profile. When updating, always `git pull` in place rather than re-cloning. If you must re-clone, copy `CLIENT_ID` from the old `.env` first.
 
 ### 6. Install the background service
 
@@ -357,7 +357,7 @@ You don't need to worry about pricing — the server handles it.
 
 When `EXTRA_CLAUDE_CONFIGS` is set, the reporter runs one agentsview invocation per remote dir, each with its own `AGENT_VIEWER_DATA_DIR` (under `~/.agentsview-tkmx/<hash>/`) and `CLAUDE_PROJECTS_DIR` (pointing at the remote `.claude/projects`). This keeps each remote mirror in its own isolated sqlite — incremental sync works per-dir and the local machine's `~/.agentsview/sessions.db` stays clean.
 
-The reporter merges Claude + Codex daily usage client-side and POSTs it to the Tokenmaxxing server. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
+The reporter merges daily usage from all enabled sources (Claude, Codex, OpenAI platform, Cursor, OpenClaw) client-side and POSTs it to the Tokenmaxxing server. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
 
 ## Logs
 
