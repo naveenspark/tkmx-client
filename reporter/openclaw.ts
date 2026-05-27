@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import type { DailyUsage } from "./usage";
+import type { DailyUsage, ModelBreakdown } from "./usage";
 
 export interface OpenclawUsageRecord {
   date: string;
@@ -42,6 +42,36 @@ export function parseUsageLine(line: string): OpenclawUsageRecord | null {
     totalTokens: Number(msg.usage.totalTokens ?? 0),
     responseId: String(msg.responseId),
   };
+}
+
+export const OPENCLAW_SOURCE = "openclaw";
+
+export function aggregateRecords(records: OpenclawUsageRecord[]): DailyUsage[] {
+  const seen = new Set<string>();
+  const byDate = new Map<string, Map<string, ModelBreakdown>>();
+  for (const rec of records) {
+    if (seen.has(rec.responseId)) continue;
+    seen.add(rec.responseId);
+    let dayModels = byDate.get(rec.date);
+    if (!dayModels) { dayModels = new Map(); byDate.set(rec.date, dayModels); }
+    let mb = dayModels.get(rec.modelName);
+    if (!mb) {
+      mb = {
+        modelName: rec.modelName, inputTokens: 0, outputTokens: 0,
+        cacheCreationTokens: 0, cacheReadTokens: 0, totalTokens: 0,
+        source: OPENCLAW_SOURCE,
+      };
+      dayModels.set(rec.modelName, mb);
+    }
+    mb.inputTokens += rec.inputTokens;
+    mb.outputTokens += rec.outputTokens;
+    mb.cacheReadTokens += rec.cacheReadTokens;
+    mb.cacheCreationTokens += rec.cacheCreationTokens;
+    mb.totalTokens += rec.totalTokens;
+  }
+  return [...byDate.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, models]) => ({ date, modelBreakdowns: [...models.values()] }));
 }
 
 export interface CollectOpenclawUsageOpts {

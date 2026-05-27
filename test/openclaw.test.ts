@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
-import { collectOpenclawUsage, parseUsageLine } from "../reporter/openclaw";
+import { collectOpenclawUsage, parseUsageLine, aggregateRecords } from "../reporter/openclaw";
 
 const FIXTURES = path.join(__dirname, "fixtures", "openclaw");
 
@@ -104,4 +104,42 @@ test("parseUsageLine falls back to message.timestamp (epoch ms) when top-level t
     },
   });
   assert.equal(parseUsageLine(line)?.date, "2026-05-25");
+});
+
+const rec = (date: string, model: string, input: number, output: number, responseId: string) => ({
+  date, modelName: model, inputTokens: input, outputTokens: output,
+  cacheReadTokens: 0, cacheCreationTokens: 0, totalTokens: input + output, responseId,
+});
+
+test("aggregateRecords sums tokens by (date, model) and tags source=openclaw", () => {
+  const result = aggregateRecords([
+    rec("2026-05-25", "anthropic/claude-sonnet-4-6", 100, 10, "r1"),
+    rec("2026-05-25", "anthropic/claude-sonnet-4-6", 200, 20, "r2"),
+    rec("2026-05-25", "anthropic/claude-opus-4-7", 50, 5, "r3"),
+    rec("2026-05-26", "anthropic/claude-sonnet-4-6", 10, 1, "r4"),
+  ]);
+  assert.equal(result.length, 2);
+  const day25 = result.find((d) => d.date === "2026-05-25")!;
+  assert.equal(day25.modelBreakdowns.length, 2);
+  const sonnet = day25.modelBreakdowns.find((m) => m.modelName === "anthropic/claude-sonnet-4-6")!;
+  assert.equal(sonnet.inputTokens, 300);
+  assert.equal(sonnet.outputTokens, 30);
+  assert.equal(sonnet.totalTokens, 330);
+  assert.equal(sonnet.source, "openclaw");
+});
+
+test("aggregateRecords dedupes records sharing the same responseId", () => {
+  const r = rec("2026-05-25", "anthropic/claude-sonnet-4-6", 100, 10, "r1");
+  const result = aggregateRecords([r, r, r]);
+  assert.equal(result[0].modelBreakdowns[0].inputTokens, 100);
+  assert.equal(result[0].modelBreakdowns[0].totalTokens, 110);
+});
+
+test("aggregateRecords returns rows sorted by date ascending", () => {
+  const result = aggregateRecords([
+    rec("2026-05-27", "m", 1, 1, "a"),
+    rec("2026-05-25", "m", 1, 1, "b"),
+    rec("2026-05-26", "m", 1, 1, "c"),
+  ]);
+  assert.deepEqual(result.map((r) => r.date), ["2026-05-25", "2026-05-26", "2026-05-27"]);
 });
