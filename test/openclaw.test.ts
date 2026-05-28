@@ -43,11 +43,11 @@ test("parseUsageLine extracts usage from an assistant message", () => {
       model: "anthropic/claude-sonnet-4-6",
       provider: "plow",
       api: "openai-completions",
-      // Real OpenClaw shape: totalTokens = input + output + cacheRead + cacheWrite
-      // (input is already net, unlike OpenAI's gross input_tokens). Verified
-      // against 5220 production records with non-zero cache; all match the
-      // sum-all formula. The collector trusts the source's totalTokens.
-      usage: { input: 31593, output: 147, cacheRead: 100, cacheWrite: 50, totalTokens: 31890 },
+      // Real OpenClaw shape: input is already net (unlike OpenAI's gross
+      // input_tokens). totalTokens here is deliberately bogus (99999) to
+      // prove the collector ignores wire totalTokens and computes its own
+      // from the four counters (expected: 31593 + 147 + 100 + 50 = 31890).
+      usage: { input: 31593, output: 147, cacheRead: 100, cacheWrite: 50, totalTokens: 99999 },
       responseId: "chatcmpl-369386b2",
     },
   });

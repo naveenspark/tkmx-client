@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import type { DailyUsage } from "./usage";
 import { mergeDailyUsage } from "./merge";
 
-export interface OpenclawUsageRecord {
+interface OpenclawUsageRecord {
   date: string;
   modelName: string;
   inputTokens: number;
@@ -43,19 +43,26 @@ export function parseUsageLine(line: string): OpenclawUsageRecord | null {
   if (!msg.usage || !msg.model || !msg.responseId) return null;
   const date = toIsoDate(obj.timestamp) ?? toIsoDate(msg.timestamp);
   if (!date) return null;
+  const inputTokens = Number(msg.usage.input ?? 0);
+  const outputTokens = Number(msg.usage.output ?? 0);
+  const cacheReadTokens = Number(msg.usage.cacheRead ?? 0);
+  const cacheCreationTokens = Number(msg.usage.cacheWrite ?? 0);
+  // Compute totalTokens from the four counters (the contract every other
+  // producer follows; ignores wire `usage.totalTokens` so a malformed
+  // upstream record can't desync component vs total fields).
   return {
     date,
     modelName: String(msg.model),
-    inputTokens: Number(msg.usage.input ?? 0),
-    outputTokens: Number(msg.usage.output ?? 0),
-    cacheReadTokens: Number(msg.usage.cacheRead ?? 0),
-    cacheCreationTokens: Number(msg.usage.cacheWrite ?? 0),
-    totalTokens: Number(msg.usage.totalTokens ?? 0),
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheCreationTokens,
+    totalTokens: inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
     responseId: String(msg.responseId),
   };
 }
 
-export const OPENCLAW_SOURCE = "openclaw";
+const OPENCLAW_SOURCE = "openclaw";
 
 const STANDALONE_REL = ".openclaw/agents/main/sessions";
 const PLOW_REL_TAIL = "openclaw/gateway/agents/main/sessions";
@@ -64,7 +71,7 @@ async function exists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
 }
 
-export interface DiscoverOpts {
+interface DiscoverOpts {
   env: NodeJS.ProcessEnv;
   homeDir: string;
   platform: NodeJS.Platform;
@@ -121,7 +128,7 @@ export function aggregateRecords(records: OpenclawUsageRecord[]): DailyUsage[] {
   return mergeDailyUsage(rows);
 }
 
-export interface CollectOpenclawUsageOpts {
+interface CollectOpenclawUsageOpts {
   sinceDateStr: string;
   /** Each entry is a sessions dir (e.g. `<root>/agents/main/sessions`). All are scanned and aggregated together. */
   sessionsDirs: string[];
