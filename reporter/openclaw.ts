@@ -131,13 +131,10 @@ export async function collectOpenclawUsage(
   opts: CollectOpenclawUsageOpts,
 ): Promise<DailyUsage[]> {
   if (opts.sessionsDirs.length === 0) return [];
-  // Normalize sinceDateStr to YYYY-MM-DD so the >= compare against r.date
-  // works regardless of whether the caller passed YYYYMMDD (production —
-  // formatSinceStr in window.ts) or YYYY-MM-DD (unit tests).
-  const sinceIso =
-    /^\d{8}$/.test(opts.sinceDateStr)
-      ? `${opts.sinceDateStr.slice(0, 4)}-${opts.sinceDateStr.slice(4, 6)}-${opts.sinceDateStr.slice(6, 8)}`
-      : opts.sinceDateStr;
+  // sinceDateStr is YYYYMMDD (the format formatSinceStr in window.ts emits;
+  // matches every other collector's input contract). r.date is YYYY-MM-DD
+  // from toIsoDate, so convert sinceDateStr to ISO before the >= compare.
+  const sinceIso = `${opts.sinceDateStr.slice(0, 4)}-${opts.sinceDateStr.slice(4, 6)}-${opts.sinceDateStr.slice(6, 8)}`;
   const records: OpenclawUsageRecord[] = [];
   for (const dir of opts.sessionsDirs) {
     // Fail loud on ENOENT / read errors — discoverOpenclawSessionsDirs has

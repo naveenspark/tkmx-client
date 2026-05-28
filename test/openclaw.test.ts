@@ -7,7 +7,7 @@ const FIXTURES = path.join(__dirname, "fixtures", "openclaw");
 
 test("collectOpenclawUsage returns [] when given zero roots", async () => {
   const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-01",
+    sinceDateStr: "20260501",
     sessionsDirs: [],
   });
   assert.deepEqual(result, []);
@@ -19,7 +19,7 @@ test("collectOpenclawUsage throws when a given root does not exist (fail-loud)",
   // production path; callers passing explicit dirs own the existence.
   await assert.rejects(
     () => collectOpenclawUsage({
-      sinceDateStr: "2026-05-01",
+      sinceDateStr: "20260501",
       sessionsDirs: [path.join(FIXTURES, "does-not-exist")],
     }),
     { code: "ENOENT" },
@@ -28,7 +28,7 @@ test("collectOpenclawUsage throws when a given root does not exist (fail-loud)",
 
 test("collectOpenclawUsage returns [] when roots exist but contain no .jsonl session files", async () => {
   const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-01",
+    sinceDateStr: "20260501",
     sessionsDirs: [path.join(FIXTURES, "empty-root")],
   });
   assert.deepEqual(result, []);
@@ -190,7 +190,7 @@ test("aggregateRecords returns rows sorted by date ascending", () => {
 
 test("collectOpenclawUsage aggregates across multiple roots, dedupes by responseId across roots, ignores trajectory + sessions.json", async () => {
   const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-01",
+    sinceDateStr: "20260501",
     sessionsDirs: [
       path.join(FIXTURES, "root-a"),
       path.join(FIXTURES, "root-b"),
@@ -212,7 +212,7 @@ test("collectOpenclawUsage aggregates across multiple roots, dedupes by response
 
 test("collectOpenclawUsage filters out days strictly before sinceDateStr", async () => {
   const result = await collectOpenclawUsage({
-    sinceDateStr: "2026-05-26",
+    sinceDateStr: "20260526",
     sessionsDirs: [
       path.join(FIXTURES, "root-a"),
       path.join(FIXTURES, "root-b"),
@@ -220,25 +220,6 @@ test("collectOpenclawUsage filters out days strictly before sinceDateStr", async
   });
   assert.equal(result.length, 1);
   assert.equal(result[0].date, "2026-05-26");
-});
-
-test("collectOpenclawUsage accepts YYYYMMDD sinceDateStr (matches production formatSinceStr output)", async () => {
-  // Production passes the YYYYMMDD string from reporter/window.ts::formatSinceStr.
-  // r.date is YYYY-MM-DD (ISO from toISOString), so the collector must normalize
-  // sinceDateStr before comparing. Without normalization, `"2026-05-25" >= "20260526"`
-  // is always false (hyphen 45 < digit 48), silently dropping every record.
-  const includes26 = await collectOpenclawUsage({
-    sinceDateStr: "20260526",
-    sessionsDirs: [path.join(FIXTURES, "root-a"), path.join(FIXTURES, "root-b")],
-  });
-  assert.equal(includes26.length, 1);
-  assert.equal(includes26[0].date, "2026-05-26");
-
-  const includesBoth = await collectOpenclawUsage({
-    sinceDateStr: "20260501",
-    sessionsDirs: [path.join(FIXTURES, "root-a"), path.join(FIXTURES, "root-b")],
-  });
-  assert.equal(includesBoth.length, 2);
 });
 
 const DISCOVERY_HOME = path.join(FIXTURES, "discovery", "home");
