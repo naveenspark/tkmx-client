@@ -229,6 +229,8 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // the parser, so they're untouched.
 // Living on the query (not the OS-unit env) means existing installs get the
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
+// The only syncing call is now syncAgentsview() below; the guard in
+// queryAgent stays as defense in case a caller ever syncs there.
 const WARP_SKIP_DIR = "/var/empty";
 
 function queryAgent(
@@ -256,35 +258,85 @@ function queryAgent(
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
 
-// Sync explicitly before discovery, not as a side effect of the first query:
-// discoverAgents reads the index, so an agent whose first session landed since
-// the last sync has to be written before we look. agentsview's syncAllLocked
-// (internal/sync/engine.go) iterates parser.Registry in one pass, so this
-// covers every agent and the per-agent queries then all pass --no-sync.
+// Refresh agentsview's local index as a standalone, time-boxed, best-effort
+// step — kept deliberately separate from the read queries below.
+//
+// Standalone also because discovery needs it: discoverAgents reads the index,
+// so an agent whose first session landed since the last sync has to be written
+// before we look.
+//
+// Why not fold sync into the query (the old behavior)? agentsview's data
+// sync — any write path, including a bare `agentsview sync` — DEADLOCKS when
+// the reporter runs under macOS launchd: the writer hangs forever inside
+// sqlite3_open_v2 (0% CPU, all goroutines parked) while read-only queries
+// (`--no-sync`) are completely unaffected. It is intrinsic to launchd's
+// spawn context, not the environment: it reproduces across agentsview
+// versions and survives ProcessType=Interactive, login-shell wrappers, a
+// fully-replicated launchd env, raised rlimits, and GOMAXPROCS=1. A query
+// that triggers sync therefore hangs until its timeout SIGKILLs it, the
+// transaction rolls back, and the report fails outright — every 2h, forever
+// (the symptom that motivated this change).
+//
+// So we ALWAYS read with --no-sync (deadlock-free) and run sync on its own:
+//   - Interactive runs, Linux/systemd, and Macs that don't hit the deadlock
+//     sync successfully → fully fresh data.
+//   - Macs where launchd sync deadlocks: the timeout reaps the hung sync and
+//     we report the last successfully-synced snapshot instead of nothing.
+// Best-effort here does NOT open the silent-skip hole, because discoverAgents
+// still throws when the index can't be read at all: a machine that has never
+// synced aborts loudly rather than POSTing zero usage as a quiet day. The
+// degradation is bounded to "stale snapshot", never "no snapshot".
+// The report can no longer hang or silently fail on the sync. A shorter
+// default timeout bounds the wasted wall-clock when sync does deadlock; an
+// incremental sync is near-instant and a cold full sync is rare. WARP_DIR is
+// pointed at an empty dir here (see WARP_SKIP_DIR) because this is the syncing
+// path that would otherwise block on Warp's Full-Disk-Access-gated sqlite.
+export function syncAgentsview(
+  bin: string,
+  timeoutMs: number = 90000,
+  extraEnv?: Record<string, string>,
+): boolean {
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    // Force-kill on timeout. The launchd deadlock parks every goroutine, so
+    // the default SIGTERM would reap it too — but SIGKILL can't be caught or
+    // ignored, so a future hang that installs a slow/blocking SIGTERM handler
+    // still gets reaped within the timeout rather than wedging the report.
+    killSignal: "SIGKILL",
+    // sync's stdout is per-session progress we never read, and it scales with
+    // history: a 96k-session machine emits megabytes, past execFileSync's
+    // 1 MiB default maxBuffer, which kills the whole run with ENOBUFS before
+    // it can POST. Discard it instead of picking a bigger number that the
+    // next-largest history outgrows. stderr stays piped so the catch below
+    // still logs a real failure's message.
+    stdio: ["ignore", "ignore", "pipe"],
+    env: { ...process.env, ...extraEnv, WARP_DIR: WARP_SKIP_DIR },
+  };
+  try {
+    execFileSync(bin, ["sync"], execOpts);
+    return true;
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+    const detail = stderr || errMessage(err);
+    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
+    return false;
+  }
+}
+
 export function collectAgentsviewUsage(
   bin: string,
   sinceStr: string,
   timeoutMs: number = 180000,
 ): AgentsviewUsageByAgent {
-  try {
-    execFileSync(bin, ["sync"], {
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      env: { ...process.env, WARP_DIR: WARP_SKIP_DIR },
-      // sync's stdout is per-session progress we never read, and it scales with
-      // history: a 96k-session machine emits megabytes, past execFileSync's
-      // 1 MiB default maxBuffer, which kills the whole run with ENOBUFS before
-      // it can POST. Discard it instead of picking a bigger number that the
-      // next-largest history outgrows. stderr stays piped so the catch below
-      // still reports a real failure's message.
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-  } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    throw new Error(`agentsview sync failed${stderr ? `: ${stderr}` : `: ${errMessage(err)}`}`);
-  }
+  syncAgentsview(bin);
 
   const since = toIsoDate(sinceStr);
+  // The one sync pass above covers every agent: agentsview's syncAllLocked
+  // (internal/sync/engine.go) iterates parser.Registry in a single pass, so a
+  // standalone `agentsview sync` picks up claude, codex, pi, opencode, gemini,
+  // copilot, etc. Every read below then runs with --no-sync so none of them can
+  // hit the launchd sync deadlock.
   const usageByAgent: AgentsviewUsageByAgent = {};
   for (const agent of discoverAgents()) {
     usageByAgent[agent] = queryAgent(bin, since, agent, true, timeoutMs);
@@ -299,6 +351,14 @@ export function collectAgentsviewUsage(
 // machine's ~/.agentsview/sessions.db. The caller passes the home's data dir
 // and source dir via env (AGENT_VIEWER_DATA_DIR + CLAUDE_PROJECTS_DIR /
 // CODEX_SESSIONS_DIR / PIEBALD_DIR / OPENCODE_DIR).
+// Deliberately NOT best-effort, unlike the local path above. The isolated dir
+// starts empty, so a swallowed sync failure here would read zero rows and the
+// run would POST a TOTAL silently missing a home the operator explicitly
+// configured — the partial-total-as-success failure that a configured home is
+// made fatal to prevent. A home that can't be collected aborts the run instead.
+// That keeps the syncing (non---no-sync) read on this path, which is the one
+// shape that can hit the launchd deadlock; aborting loudly is the intended
+// outcome there, not a regression.
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
   return queryAgent(bin, since, agent, false, timeoutMs, env);

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, discoverAgents, resolveAgentsviewWith } from "../reporter/agentsview";
+import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, discoverAgents, syncAgentsview, resolveAgentsviewWith } from "../reporter/agentsview";
 import { writeFakeIndex } from "./fake-index";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
@@ -180,6 +180,33 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
       },
     );
   });
+
+  // The launchd deadlock, end to end: sync fails (or is SIGKILLed at the
+  // timeout) and the run must still report the last-synced snapshot. Before
+  // this, the sync's failure was rethrown and the whole 2-hourly report died
+  // — on the affected Macs, 100% of runs, forever. Fail-soft is bounded on
+  // the other side by discoverAgents, which still throws when the index can't
+  // be read at all, so "never synced" stays a loud abort rather than a POST
+  // of zero usage dressed up as a quiet day.
+  it("still reports last-synced data when the sync itself fails", () => {
+    withFakeAgentsview(
+      ["claude"],
+      (tmp) => `#!/bin/sh
+echo "$*" >> "${path.join(tmp, "calls.log")}"
+if [ "$1" = "sync" ]; then echo "spawnSync ETIMEDOUT" >&2; exit 1; fi
+echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
+`,
+      (fakeBin, tmp) => {
+        const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+
+        assert.equal(usageByAgent.claude[0].date, "2026-05-01");
+
+        const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
+        assert.equal(lines[0], "sync", "sync was attempted");
+        assert.ok(lines.length > 1, "reads continue after the sync failed");
+      },
+    );
+  });
 });
 
 describe("collectAgentsviewUsage large sync output", () => {
@@ -217,6 +244,44 @@ describe("discoverAgents", () => {
         () => discoverAgents({ AGENTSVIEW_DATA_DIR: tmp } as NodeJS.ProcessEnv),
         /cannot read the AgentsView index/,
       );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("syncAgentsview", () => {
+  it("returns true when `agentsview sync` exits 0", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, "#!/bin/sh\nexit 0\n");
+      assert.equal(syncAgentsview(bin), true);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns false (best-effort, no throw) when sync fails", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, "#!/bin/sh\necho boom >&2\nexit 1\n");
+      assert.equal(syncAgentsview(bin), false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("returns false (no throw) when sync hangs past the timeout", () => {
+    // Mirrors the macOS launchd deadlock: the sync never returns, so the
+    // timeout must SIGKILL it and we fall through to a read instead of
+    // hanging the whole report.
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, "#!/bin/sh\nsleep 30\n");
+      assert.equal(syncAgentsview(bin, 300), false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
