@@ -13,6 +13,7 @@ import {
 } from "./agentsview";
 import { collectOpenAIUsage } from "./openai";
 import { collectOpenclawUsage, discoverOpenclawSessionsDirs } from "./openclaw";
+import { collectGrokUsage, discoverGrokSessionsDirs } from "./grok";
 import { mergeDailyUsage, type DailyUsage } from "./merge";
 import { collectClaudeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
@@ -320,7 +321,19 @@ async function main(): Promise<void> {
     console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
   }
 
-  const mergedDaily = mergeDailyUsage(claudeDaily, allCodexDaily, openaiDaily, openclawDaily);
+  const grokDirs = await discoverGrokSessionsDirs({
+    env: process.env,
+    homeDir: os.homedir(),
+  });
+  const grokDaily = await collectGrokUsage({
+    sinceDateStr: sinceStr,
+    sessionsDirs: grokDirs,
+  });
+  if (grokDirs.length > 0) {
+    console.log(`  Grok: ${grokDaily.length} days from ${grokDirs.length} root(s)`);
+  }
+
+  const mergedDaily = mergeDailyUsage(claudeDaily, allCodexDaily, openaiDaily, openclawDaily, grokDaily);
 
   if (mergedDaily.length === 0) {
     // Previously we returned here, skipping session_stats / cursor_stats

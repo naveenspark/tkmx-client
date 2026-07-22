@@ -90,6 +90,7 @@ cp .env.example .env
 | `DEMO_VIDEO_URL` | No | YouTube URL (**3 min or shorter**) showing your before/after AI coding workflow. Embedded on your profile page under "3-MIN DEMO VIDEO". |
 | `HN_USERNAME` | No | Your Hacker News username (e.g. `Sam_Odio`). Required to appear on the leaderboard — see [HN Verification](#appearing-on-the-leaderboard-hn-verification) |
 | `OPENCLAW_SESSIONS_DIRS` | No | Override OpenClaw auto-discovery with a comma-separated list of session directories. Defaults to auto-discovery of standalone + Plow variants on macOS. See [OpenClaw Usage](#openclaw-usage). |
+| `GROK_SESSIONS_DIRS` | No | Override Grok auto-discovery with a comma-separated list of session roots. Defaults to `~/.grok/sessions` when present. See [Grok Usage](#grok-usage). |
 | `REPORT_DAYS` | No | Days of history to report (default: `28`). See [Backfill & Optimization](#backfill--optimization) |
 | `REPORT_MACHINE_CONFIG` | No | Set to `true` to share machine info (OS, CPU, memory, installed skills, MCP servers, hooks, CLAUDE.md stats, shell/editor) on your profile. No prompts, code, or keys are ever sent. |
 | `REPORT_DEV_STATS` | No | Set to `true` to share how you code — tool-call frequencies, session stats, cache efficiency, git outcome metrics (commits/LOC/PRs), and Cursor AI attribution. No file paths, prompts, or code are ever sent. See [Dev Stats](#dev-stats). |
@@ -255,6 +256,14 @@ OPENCLAW_SESSIONS_DIRS=/custom/path/agents/main/sessions,/another/path/agents/ma
 ```
 
 The override replaces the auto-discovered list entirely. Each directory is scanned for `*.jsonl` files; `*.trajectory.jsonl` and `sessions.json` are ignored. Cross-file and cross-root duplicates are deduped by each LLM call's `responseId`, so running multiple Plow variants that share OpenClaw data won't double-count.
+
+## Grok Usage
+
+If you run the [Grok CLI](https://x.ai) locally, per-turn token usage is read directly from each session's `updates.jsonl` event log and merged into your reports under the `grok` source. No setup required: the reporter probes `~/.grok/sessions` on each run and skips silently when it's absent.
+
+Grok usage can't come from agentsview like Claude/Codex — agentsview's Grok provider imports session metadata only and (by design) never parses `updates.jsonl`, which is the only place Grok persists token counts. Counters are normalized to match the other sources: cached reads are subtracted out of Grok's gross `inputTokens`, and per-turn records are deduped by `(sessionId, prompt_id, model)`.
+
+To point the reporter at non-default locations, set `GROK_SESSIONS_DIRS` in `.env` to one or more session roots, comma-separated. The override replaces the probed default entirely.
 
 ## Profile Page
 
