@@ -18,7 +18,7 @@ gets it inlined into `.roborev.toml` by `just sync-review-config` in the
 **Distribution model:** Internal only; no external customer deployments.
 
 **Architectural commitments:**
-- Keep the reporter cron (`reporter/report.js`) self-contained and restartable; it runs unattended every 2 hours.
+- Keep the reporter cron self-contained and restartable; it runs unattended every 2 hours. Source is `reporter/report.ts`; installed units run the compiled `dist/reporter/report.js` (`reporter/report.js` is only a shim for pre-migration installs).
 - Fail-fast on config or credential errors — do not silently skip reporting cycles.
 
 **Known near-term migrations / roadmap items:**
