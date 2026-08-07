@@ -40,12 +40,37 @@ const USERNAME = process.env.TKMX_USERNAME || ENV_FILE.USERNAME;
 const SERVER_URL = process.env.SERVER_URL || "https://tokenmaxxing.odio.dev";
 const TEAM = process.env.TEAM || "default";
 const API_KEY = process.env.API_KEY;
-const TOOLS = process.env.TOOLS || "";
-const COMMUNITIES = process.env.COMMUNITIES || "";
-const PROJECTS = process.env.PROJECTS || "";
-const ABOUT = process.env.ABOUT || "";
-const HN_USERNAME = process.env.HN_USERNAME || "";
-const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
+// The profile-prose set, declared once. Everything that has to agree on which
+// fields these are — what gets posted, which nudges fire, and the multi-machine
+// hint — is driven from this array, so "did I cover all of them?" stops being a
+// question you answer by reading several lists and hoping they match.
+//
+// Each key's env name is DERIVED, not paired alongside it — every one of these
+// is just the key uppercased — so there is no second list of names to keep in
+// step and no way for a row to read one field's env var under another's key.
+// Values are trimmed, so a key left blank in .env (how .env.example ships every
+// one of them) reads as "not configured" for the payload and the nudge alike,
+// rather than as an empty value worth posting.
+//
+// hn_username's nudge is null because it has its own two-branch message below
+// (set vs. unset); it still belongs here for the payload and the hint.
+const PROFILE_NUDGES = {
+  tools: "which AI tools you use daily (e.g. superpowers,paperclip)",
+  projects: "what you're spending tokens on (e.g. tkmx,plow.co)",
+  communities: "which dev communities you're part of",
+  about: "a short description for your profile page",
+  demo_video_url: "a 3-min demo of your AI workflow",
+  hn_username: null,
+} as const;
+type ProfileKey = keyof typeof PROFILE_NUDGES;
+const PROFILE_FIELDS = Object.entries(PROFILE_NUDGES).map(([key, nudge]) => {
+  const env = key.toUpperCase();
+  return { key: key as ProfileKey, env, nudge, value: (process.env[env] || "").trim() };
+});
+
+// The one field also read outside the array, for its set/unset nudge pair.
+const HN_USERNAME = PROFILE_FIELDS.find((f) => f.key === "hn_username")!.value;
+
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 
@@ -235,12 +260,14 @@ function postUsage(payload: string): Promise<ServerResponse> {
 interface ReportBody {
   username: string;
   team: string;
-  tools: string;
-  communities: string;
-  projects: string;
-  about: string;
-  hn_username: string;
-  demo_video_url: string;
+  // Optional: a profile-prose key this machine hasn't configured is left out
+  // of the POST entirely rather than sent as "". See where `body` is built.
+  tools?: string;
+  communities?: string;
+  projects?: string;
+  about?: string;
+  hn_username?: string;
+  demo_video_url?: string;
   client_id: string;
   client_version: string;
   report_days: number;
@@ -337,17 +364,24 @@ async function main(): Promise<void> {
   const body: ReportBody = {
     username: USERNAME as string,
     team: TEAM,
-    tools: TOOLS,
-    communities: COMMUNITIES,
-    projects: PROJECTS,
-    about: ABOUT,
-    hn_username: HN_USERNAME,
-    demo_video_url: DEMO_VIDEO_URL,
     client_id: CLIENT_ID as string,
     client_version: CLIENT_VERSION,
     report_days: REPORT_DAYS,
     data: mergedDaily,
   };
+
+  // Profile prose comes from THIS machine's .env, but the profile it lands on is
+  // shared by every machine reporting under this username. Sending "" for a field
+  // nobody on this machine has configured is at best meaningless and at worst
+  // destructive, so send nothing at all.
+  //
+  // What the server does with what it receives isn't knowable from here — `tools`
+  // is known to merge rather than replace, and the scalar fields are unverified —
+  // which is exactly why this side declines to guess. Omitting an unconfigured
+  // field is the only behaviour that's correct under either semantics.
+  for (const f of PROFILE_FIELDS) {
+    if (f.value) body[f.key] = f.value;
+  }
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
   if (machineConfig) body.machine_config = machineConfig;
@@ -389,16 +423,21 @@ async function main(): Promise<void> {
   const profileUrl = `https://www.watchmepivot.com/builder-index/u/${USERNAME}`;
   console.log(`  Profile: ${profileUrl}`);
 
-  if (!TOOLS) console.log(`  Set TOOLS in .env — which AI tools you use daily (e.g. superpowers,paperclip)`);
-  if (!PROJECTS) console.log(`  Set PROJECTS in .env — what you're spending tokens on (e.g. tkmx,plow.co)`);
-  if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
-  if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
-  if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
-
+  for (const f of PROFILE_FIELDS) {
+    if (!f.value && f.nudge) console.log(`  Set ${f.env} in .env — ${f.nudge}`);
+  }
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {
     console.log(`  Verify your HN account on your Builder Index profile (${profileUrl}) to appear on the Builder Index`);
+  }
+
+  // Printed after every nudge and covering the whole set, because all of these
+  // are omitted when blank. Without it the nudges contradict .env.example, which
+  // tells a multi-machine operator to leave them blank on every machine but one
+  // — and then this machine nags them to fill them in every two hours, forever.
+  if (PROFILE_FIELDS.some((f) => !f.value)) {
+    console.log(`  (Reporting from more than one machine? Set the fields above on one machine only — blank here means "leave my profile alone".)`);
   }
 
   if (response && response.client_update) {
