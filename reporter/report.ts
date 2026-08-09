@@ -20,6 +20,7 @@ import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
 import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
+import { resolveAvatarUrl } from "./avatar";
 import { errMessage } from "./errors";
 
 // PROJECT_ROOT is the actual checked-out repo (not dist/). After build, this
@@ -71,6 +72,11 @@ const PROFILE_FIELDS = Object.entries(PROFILE_NUDGES).map(([key, nudge]) => {
 // The one field also read outside the array, for its set/unset nudge pair.
 const HN_USERNAME = PROFILE_FIELDS.find((f) => f.key === "hn_username")!.value;
 
+
+// Trimmed on read so the nudge below and resolveAvatarUrl (which trims) agree
+// on what "not configured" means — AVATAR="   " would otherwise send nothing
+// while also suppressing the nudge telling you it sent nothing.
+const AVATAR = (process.env.AVATAR || "").trim();
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
 const EXTRA_PI_CONFIGS = process.env.EXTRA_PI_CONFIGS || "";
@@ -80,6 +86,13 @@ if (!USERNAME || !API_KEY) {
   console.error("USERNAME and API_KEY must be set in .env");
   process.exit(1);
 }
+
+// Resolved at startup, alongside the USERNAME/API_KEY guard above, so a typo'd
+// AVATAR fails the run loudly rather than being quietly dropped. Nothing is
+// lost by aborting: `data` covers the last REPORT_DAYS (28 by default), so the
+// next run after the fix re-sends the same window. Resolved at the top of
+// main() rather than here so a bad value reaches the `Fatal:` handler and the
+// operator gets the message instead of a module-load stack trace.
 
 function readMachineId(): string | null {
   try {
@@ -270,6 +283,9 @@ interface ReportBody {
   about?: string;
   hn_username?: string;
   demo_video_url?: string;
+  // Omitted when AVATAR is unset, so a client that doesn't set one never
+  // clears an avatar configured elsewhere.
+  avatar_url?: string;
   client_id: string;
   client_version: string;
   report_days: number;
@@ -282,6 +298,7 @@ interface ReportBody {
 }
 
 async function main(): Promise<void> {
+  const AVATAR_URL = resolveAvatarUrl(AVATAR);
   const REPORT_DAYS = parseInt(process.env.REPORT_DAYS || "", 10) || 28;
   // Two date windows: `sinceStr` bounds `body.data` (daily usage rows,
   // merged per-date by the server — short windows safe), `statsSinceStr`
@@ -390,6 +407,7 @@ async function main(): Promise<void> {
   for (const f of PROFILE_FIELDS) {
     if (f.value) body[f.key] = f.value;
   }
+  if (AVATAR_URL) body.avatar_url = AVATAR_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
   if (machineConfig) body.machine_config = machineConfig;
@@ -434,6 +452,7 @@ async function main(): Promise<void> {
   for (const f of PROFILE_FIELDS) {
     if (!f.value && f.nudge) console.log(`  Set ${f.env} in .env — ${f.nudge}`);
   }
+  if (!AVATAR) console.log(`  Set AVATAR in .env — a picture for your profile (https://…, gravatar:you@example.com, or github:yourhandle) — not active yet, needs server support`);
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {

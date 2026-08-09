@@ -382,6 +382,77 @@ for (const tc of [
   });
 }
 
+// AVATAR is resolved to a plain URL on this side (see reporter/avatar.ts) so
+// the server only ever stores one string. These cover the wiring: resolved
+// value reaches the POST, unset stays out of it, malformed stops the run.
+test("AVATAR reaches the server as a resolved avatar_url", async () => {
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  try {
+    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "github:octocat" });
+    assert.equal(
+      result.status,
+      0,
+      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    const captured = ctx.getCaptured();
+    assert.ok(captured, "server did not capture a POST body");
+    assert.equal(
+      captured.avatar_url,
+      "https://github.com/octocat.png?size=256",
+      "the shorthand must be resolved client-side, not posted raw",
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test("an unset AVATAR is left out of the POST entirely", async () => {
+  // So a client with no avatar configured never clears one set elsewhere.
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  try {
+    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "" });
+    assert.equal(result.status, 0, `reporter exited non-zero.\nstderr:\n${result.stderr}`);
+    const captured = ctx.getCaptured();
+    assert.ok(captured, "server did not capture a POST body");
+    assert.ok(
+      !("avatar_url" in captured),
+      `avatar_url must be absent, got ${JSON.stringify(captured.avatar_url)}`,
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test("a malformed AVATAR aborts before posting, without echoing its value", async () => {
+  // Two contracts, one run, because a credential-bearing value exercises both.
+  //
+  // Fail-fast per REVIEW.md: a typo'd avatar is a config error the operator can
+  // fix, and nothing is lost by stopping — `data` covers the last REPORT_DAYS,
+  // so the next run after the fix re-sends the same window.
+  //
+  // And no-echo: stderr on an installed client is an unattended launchd/systemd
+  // log, and a malformed value is exactly the case that can still carry a
+  // password — `https://user:pw@` fails to parse and reaches the error path
+  // with the secret intact.
+  //
+  // Which reason each malformed *form* produces is covered per-branch in
+  // test/avatar.test.ts; what only an end-to-end run can show is that the
+  // process stops, nothing is POSTed, and the value never reaches a log.
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  try {
+    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "https://user:hunter2@" });
+    assert.notEqual(result.status, 0, "reporter must exit non-zero on a malformed AVATAR");
+    assert.equal(ctx.getCaptured(), null, "no POST may be sent when AVATAR is malformed");
+    assert.match(result.stderr, /AVATAR is not a URL/i, `expected a generic reason, got:\n${result.stderr}`);
+    assert.ok(
+      !result.stderr.includes("hunter2") && !result.stdout.includes("hunter2"),
+      `the AVATAR value leaked into the logs:\n${result.stderr}${result.stdout}`,
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
 test("inactive day (no usage rows) still posts and still refreshes session_stats", async () => {
   // Regression: the reporter used to early-return when mergedDaily was
   // empty, skipping session_stats / cursor_stats collection and the POST
