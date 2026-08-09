@@ -463,7 +463,11 @@ async function main(): Promise<void> {
   // are omitted when blank. Without it the nudges contradict .env.example, which
   // tells a multi-machine operator to leave them blank on every machine but one
   // — and then this machine nags them to fill them in every two hours, forever.
-  if (PROFILE_FIELDS.some((f) => !f.value)) {
+  //
+  // AVATAR is in the condition but not in PROFILE_FIELDS: it isn't profile prose
+  // and has its own resolver, but it is omitted-when-unset in exactly the same
+  // way, so a machine that keeps its picture elsewhere needs the same reassurance.
+  if (PROFILE_FIELDS.some((f) => !f.value) || !AVATAR) {
     console.log(`  (Reporting from more than one machine? Set the fields above on one machine only — blank here means "leave my profile alone".)`);
   }
 
