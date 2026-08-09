@@ -41,18 +41,46 @@ const USERNAME = process.env.TKMX_USERNAME || ENV_FILE.USERNAME;
 const SERVER_URL = process.env.SERVER_URL || "https://tokenmaxxing.odio.dev";
 const TEAM = process.env.TEAM || "default";
 const API_KEY = process.env.API_KEY;
-const TOOLS = process.env.TOOLS || "";
-const COMMUNITIES = process.env.COMMUNITIES || "";
-const PROJECTS = process.env.PROJECTS || "";
-const ABOUT = process.env.ABOUT || "";
-const HN_USERNAME = process.env.HN_USERNAME || "";
-const DEMO_VIDEO_URL = process.env.DEMO_VIDEO_URL || "";
+// The profile-prose set, declared once. Everything that has to agree on which
+// fields these are — what gets posted, which nudges fire, and the multi-machine
+// hint — is driven from this array, so "did I cover all of them?" stops being a
+// question you answer by reading several lists and hoping they match.
+//
+// Each key's env name is DERIVED, not paired alongside it — every one of these
+// is just the key uppercased — so there is no second list of names to keep in
+// step and no way for a row to read one field's env var under another's key.
+// Values are trimmed, so a key left blank in .env (how .env.example ships every
+// one of them) reads as "not configured" for the payload and the nudge alike,
+// rather than as an empty value worth posting.
+//
+// hn_username's nudge is null because it has its own two-branch message below
+// (set vs. unset); it still belongs here for the payload and the hint.
+const PROFILE_NUDGES = {
+  tools: "which AI tools you use daily (e.g. superpowers,paperclip)",
+  projects: "what you're spending tokens on (e.g. tkmx,plow.co)",
+  communities: "which dev communities you're part of",
+  about: "a short description for your profile page",
+  demo_video_url: "a 3-min demo of your AI workflow",
+  hn_username: null,
+} as const;
+type ProfileKey = keyof typeof PROFILE_NUDGES;
+const PROFILE_FIELDS = Object.entries(PROFILE_NUDGES).map(([key, nudge]) => {
+  const env = key.toUpperCase();
+  return { key: key as ProfileKey, env, nudge, value: (process.env[env] || "").trim() };
+});
+
+// The one field also read outside the array, for its set/unset nudge pair.
+const HN_USERNAME = PROFILE_FIELDS.find((f) => f.key === "hn_username")!.value;
+
+
 // Trimmed on read so the nudge below and resolveAvatarUrl (which trims) agree
 // on what "not configured" means — AVATAR="   " would otherwise send nothing
 // while also suppressing the nudge telling you it sent nothing.
 const AVATAR = (process.env.AVATAR || "").trim();
 const EXTRA_CLAUDE_CONFIGS = process.env.EXTRA_CLAUDE_CONFIGS || "";
 const EXTRA_CODEX_CONFIGS = process.env.EXTRA_CODEX_CONFIGS || "";
+const EXTRA_PI_CONFIGS = process.env.EXTRA_PI_CONFIGS || "";
+const EXTRA_OPENCODE_CONFIGS = process.env.EXTRA_OPENCODE_CONFIGS || "";
 
 if (!USERNAME || !API_KEY) {
   console.error("USERNAME and API_KEY must be set in .env");
@@ -113,13 +141,12 @@ function agentsviewDataDirFor(absConfigDir: string): string {
   return path.join(os.homedir(), ".agentsview-tkmx", hash);
 }
 
-// Collect usage from extra agentsview homes beyond the local scan — synced
-// remote ~/.claude dirs (EXTRA_CLAUDE_CONFIGS) or separate ~/.codex homes
-// (EXTRA_CODEX_CONFIGS, e.g. reviewer bot accounts). Each entry is a home dir
-// containing `subdir` (projects/ for claude, sessions/ for codex); its usage is
+// Collect usage from extra AgentsView-backed homes beyond the local scan:
+// Claude projects, Codex sessions, Pi root data dirs, and OpenCode root data
+// dirs. Each entry is validated against the descriptor's expected directory,
 // synced into an isolated data dir (so it can't contaminate the local
-// sessions.db) and returned for the caller to fold into the matching source.
-// A configured home that can't be collected — missing `subdir`, or any
+// sessions.db), and returned for the caller to fold into the matching source.
+// A configured home that can't be collected — missing expected directory, or any
 // agentsview failure — is fatal: the operator listed it, so the run aborts
 // rather than POST a silently partial total as success (the original cause of
 // weeks of unreported usage).
@@ -133,9 +160,10 @@ function collectExtraAgentsviewHomes(
   for (const entry of parseExtraConfigs(raw)) {
     const absEntry = path.resolve(entry);
     const name = path.basename(absEntry) || absEntry;
-    const subdirPath = path.join(absEntry, opts.subdir);
+    const subdirPath = opts.subdir === "." ? absEntry : path.join(absEntry, opts.subdir);
+    const expectedPathLabel = opts.subdir === "." ? "directory" : `${opts.subdir}/ subdir`;
     if (!fs.existsSync(subdirPath)) {
-      throw new Error(`${opts.label} (${name}) missing ${opts.subdir}/ subdir at ${absEntry} — a configured EXTRA_${opts.label.toUpperCase()}_CONFIGS home must be a valid ${opts.agent} home`);
+      throw new Error(`${opts.label} (${name}) missing ${expectedPathLabel} at ${absEntry} — a configured EXTRA_${opts.label.toUpperCase()}_CONFIGS home must be a valid ${opts.agent} home`);
     }
     const dataDir = agentsviewDataDirFor(absEntry);
     fs.mkdirSync(dataDir, { recursive: true });
@@ -247,12 +275,14 @@ function postUsage(payload: string): Promise<ServerResponse> {
 interface ReportBody {
   username: string;
   team: string;
-  tools: string;
-  communities: string;
-  projects: string;
-  about: string;
-  hn_username: string;
-  demo_video_url: string;
+  // Optional: a profile-prose key this machine hasn't configured is left out
+  // of the POST entirely rather than sent as "". See where `body` is built.
+  tools?: string;
+  communities?: string;
+  projects?: string;
+  about?: string;
+  hn_username?: string;
+  demo_video_url?: string;
   // Omitted when AVATAR is unset, so a client that doesn't set one never
   // clears an avatar configured elsewhere.
   avatar_url?: string;
@@ -304,19 +334,25 @@ async function main(): Promise<void> {
   const agentsviewVersion = detectAgentsviewVersion(agentsviewBin);
   if (agentsviewVersion) console.log(`  agentsview version: ${agentsviewVersion}`);
 
-  const { claudeDaily: localClaudeDaily, codexDaily: localCodexDaily } = collectAgentsviewUsage(agentsviewBin, sinceStr);
-  console.log(`  Claude (local): ${localClaudeDaily.length} days`);
-  console.log(`  Codex (local): ${localCodexDaily.length} days`);
+  const localAgentsviewDaily = collectAgentsviewUsage(agentsviewBin, sinceStr);
+  console.log(`  Claude (local): ${localAgentsviewDaily.claude.length} days`);
+  console.log(`  Codex (local): ${localAgentsviewDaily.codex.length} days`);
+  console.log(`  Pi (local): ${localAgentsviewDaily.pi.length} days`);
+  console.log(`  OpenCode (local): ${localAgentsviewDaily.opencode.length} days`);
 
-  // Extra homes outside the local scan, folded into their matching source so
-  // mergeDailyUsage sums same-(date,model,source) rows before POST (see merge.ts
-  // for the canonical dedup/summing contract) rather than letting them collide
-  // on the server upsert. Codex homes (e.g. the reviewer bot's per-account
-  // ~/.codex) report under "codex" alongside the local scan.
-  const [claudeDaily, allCodexDaily] = [
-    { local: localClaudeDaily, raw: EXTRA_CLAUDE_CONFIGS, agent: "claude", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", label: "Claude" },
-    { local: localCodexDaily,  raw: EXTRA_CODEX_CONFIGS,  agent: "codex",  subdir: "sessions",  subdirEnvKey: "CODEX_SESSIONS_DIR", label: "Codex" },
-  ].map((s) => s.local.concat(collectExtraAgentsviewHomes(agentsviewBin, sinceStr, s.raw, s)));
+  // Extra homes outside the local scan are folded into their matching
+  // AgentsView-backed source so mergeDailyUsage sums same-(date,model,source)
+  // rows before POST (see merge.ts for the canonical dedup/summing contract)
+  // rather than letting them collide on the server upsert.
+  const agentsviewSources = [
+    { local: localAgentsviewDaily.claude, raw: EXTRA_CLAUDE_CONFIGS, agent: "claude", subdir: "projects", subdirEnvKey: "CLAUDE_PROJECTS_DIR", label: "Claude" },
+    { local: localAgentsviewDaily.codex, raw: EXTRA_CODEX_CONFIGS, agent: "codex", subdir: "sessions", subdirEnvKey: "CODEX_SESSIONS_DIR", label: "Codex" },
+    { local: localAgentsviewDaily.pi, raw: EXTRA_PI_CONFIGS, agent: "pi", subdir: ".", subdirEnvKey: "PIEBALD_DIR", label: "Pi" },
+    { local: localAgentsviewDaily.opencode, raw: EXTRA_OPENCODE_CONFIGS, agent: "opencode", subdir: ".", subdirEnvKey: "OPENCODE_DIR", label: "OpenCode" },
+  ];
+  const agentsviewDaily = agentsviewSources.map((s) => (
+    s.local.concat(collectExtraAgentsviewHomes(agentsviewBin, sinceStr, s.raw, s))
+  ));
 
   const openaiDaily = await collectOpenAIUsage(sinceStr);
   if (openaiDaily.length > 0) {
@@ -336,7 +372,7 @@ async function main(): Promise<void> {
     console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
   }
 
-  const mergedDaily = mergeDailyUsage(claudeDaily, allCodexDaily, openaiDaily, openclawDaily);
+  const mergedDaily = mergeDailyUsage(...agentsviewDaily, openaiDaily, openclawDaily);
 
   if (mergedDaily.length === 0) {
     // Previously we returned here, skipping session_stats / cursor_stats
@@ -353,17 +389,24 @@ async function main(): Promise<void> {
   const body: ReportBody = {
     username: USERNAME as string,
     team: TEAM,
-    tools: TOOLS,
-    communities: COMMUNITIES,
-    projects: PROJECTS,
-    about: ABOUT,
-    hn_username: HN_USERNAME,
-    demo_video_url: DEMO_VIDEO_URL,
     client_id: CLIENT_ID as string,
     client_version: CLIENT_VERSION,
     report_days: REPORT_DAYS,
     data: mergedDaily,
   };
+
+  // Profile prose comes from THIS machine's .env, but the profile it lands on is
+  // shared by every machine reporting under this username. Sending "" for a field
+  // nobody on this machine has configured is at best meaningless and at worst
+  // destructive, so send nothing at all.
+  //
+  // What the server does with what it receives isn't knowable from here — `tools`
+  // is known to merge rather than replace, and the scalar fields are unverified —
+  // which is exactly why this side declines to guess. Omitting an unconfigured
+  // field is the only behaviour that's correct under either semantics.
+  for (const f of PROFILE_FIELDS) {
+    if (f.value) body[f.key] = f.value;
+  }
   if (AVATAR_URL) body.avatar_url = AVATAR_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
@@ -406,17 +449,22 @@ async function main(): Promise<void> {
   const profileUrl = `https://www.watchmepivot.com/builder-index/u/${USERNAME}`;
   console.log(`  Profile: ${profileUrl}`);
 
-  if (!TOOLS) console.log(`  Set TOOLS in .env — which AI tools you use daily (e.g. superpowers,paperclip)`);
-  if (!PROJECTS) console.log(`  Set PROJECTS in .env — what you're spending tokens on (e.g. tkmx,plow.co)`);
-  if (!COMMUNITIES) console.log(`  Set COMMUNITIES in .env — which dev communities you're part of`);
-  if (!ABOUT) console.log(`  Set ABOUT in .env — a short description for your profile page`);
-  if (!DEMO_VIDEO_URL) console.log(`  Set DEMO_VIDEO_URL in .env — a 3-min demo of your AI workflow`);
+  for (const f of PROFILE_FIELDS) {
+    if (!f.value && f.nudge) console.log(`  Set ${f.env} in .env — ${f.nudge}`);
+  }
   if (!AVATAR) console.log(`  Set AVATAR in .env — a picture for your profile (https://…, gravatar:you@example.com, or github:yourhandle) — not active yet, needs server support`);
-
   if (!HN_USERNAME) {
     console.log(`  Set HN_USERNAME in .env to appear on the Builder Index`);
   } else {
     console.log(`  Verify your HN account on your Builder Index profile (${profileUrl}) to appear on the Builder Index`);
+  }
+
+  // Printed after every nudge and covering the whole set, because all of these
+  // are omitted when blank. Without it the nudges contradict .env.example, which
+  // tells a multi-machine operator to leave them blank on every machine but one
+  // — and then this machine nags them to fill them in every two hours, forever.
+  if (PROFILE_FIELDS.some((f) => !f.value)) {
+    console.log(`  (Reporting from more than one machine? Set the fields above on one machine only — blank here means "leave my profile alone".)`);
   }
 
   if (response && response.client_update) {
