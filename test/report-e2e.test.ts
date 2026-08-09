@@ -341,6 +341,34 @@ for (const tc of [
     // about fields you've already set, with the suite still green.
     stdoutLacks: ["Set TOOLS in .env"],
   },
+  {
+    // AVATAR is omitted-when-unset like the prose fields but lives outside
+    // PROFILE_FIELDS, so it needs its own disjunct in the hint's condition.
+    // Every PROFILE_FIELDS value is set here, so this is the only shape that
+    // catches a missing one — any row with prose blank passes either way.
+    name: "hint fires when AVATAR alone is unset",
+    env: {
+      TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
+      ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x", HN_USERNAME: "drodio", AVATAR: "",
+    },
+    present: {},
+    absent: ["avatar_url"],
+    stdoutHas: ["Set AVATAR in .env", MULTI_MACHINE_HINT],
+  },
+  {
+    // The negative side of the same condition. Without this the disjunction
+    // could degrade to always-true and nag every operator every two hours —
+    // the exact thing the hint exists to avoid — with the suite still green.
+    name: "hint stays quiet when nothing is left unset",
+    env: {
+      TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
+      ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x", HN_USERNAME: "drodio", AVATAR: "github:octocat",
+    },
+    present: { tools: "Sparkle.ai", avatar_url: "https://github.com/octocat.png?size=256" },
+    absent: [],
+    stdoutHas: [],
+    stdoutLacks: [MULTI_MACHINE_HINT, "Set AVATAR in .env"],
+  },
 ]) {
   test(`profile prose payload — ${tc.name}`, async () => {
     const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
@@ -400,36 +428,6 @@ test("AVATAR reaches the server as a resolved avatar_url", async () => {
       captured.avatar_url,
       "https://github.com/octocat.png?size=256",
       "the shorthand must be resolved client-side, not posted raw",
-    );
-  } finally {
-    ctx.cleanup();
-  }
-});
-
-test("the multi-machine hint fires when AVATAR is the only unset field", async () => {
-  // AVATAR is omitted-when-unset exactly like the profile-prose fields, so a
-  // machine keeping its picture elsewhere must get the same "this is fine"
-  // line. Without AVATAR in the hint's condition it is nudged about every two
-  // hours with no explanation — the same defect that hit hn_username twice.
-  // Every field in PROFILE_FIELDS is set here, so this is the only case that
-  // catches it; any row with prose left blank passes either way.
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  fs.writeFileSync(ENV_PATH, MINIMAL_ENV);
-  try {
-    const result = await runReporter({
-      ...ctx.baseEnv,
-      TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
-      ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x", HN_USERNAME: "drodio",
-      AVATAR: "",
-    });
-    assert.equal(result.status, 0, `reporter exited non-zero.\nstderr:\n${result.stderr}`);
-    assert.ok(
-      result.stdout.includes("Set AVATAR in .env"),
-      `expected the AVATAR nudge.\nGot:\n${result.stdout}`,
-    );
-    assert.ok(
-      result.stdout.includes(MULTI_MACHINE_HINT),
-      `an unset AVATAR must get the multi-machine hint too.\nGot:\n${result.stdout}`,
     );
   } finally {
     ctx.cleanup();
