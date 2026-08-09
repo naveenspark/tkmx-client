@@ -406,6 +406,36 @@ test("AVATAR reaches the server as a resolved avatar_url", async () => {
   }
 });
 
+test("the multi-machine hint fires when AVATAR is the only unset field", async () => {
+  // AVATAR is omitted-when-unset exactly like the profile-prose fields, so a
+  // machine keeping its picture elsewhere must get the same "this is fine"
+  // line. Without AVATAR in the hint's condition it is nudged about every two
+  // hours with no explanation — the same defect that hit hn_username twice.
+  // Every field in PROFILE_FIELDS is set here, so this is the only case that
+  // catches it; any row with prose left blank passes either way.
+  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
+  fs.writeFileSync(ENV_PATH, MINIMAL_ENV);
+  try {
+    const result = await runReporter({
+      ...ctx.baseEnv,
+      TOOLS: "Sparkle.ai", PROJECTS: "tkmx", COMMUNITIES: "hn",
+      ABOUT: "about me", DEMO_VIDEO_URL: "https://youtu.be/x", HN_USERNAME: "drodio",
+      AVATAR: "",
+    });
+    assert.equal(result.status, 0, `reporter exited non-zero.\nstderr:\n${result.stderr}`);
+    assert.ok(
+      result.stdout.includes("Set AVATAR in .env"),
+      `expected the AVATAR nudge.\nGot:\n${result.stdout}`,
+    );
+    assert.ok(
+      result.stdout.includes(MULTI_MACHINE_HINT),
+      `an unset AVATAR must get the multi-machine hint too.\nGot:\n${result.stdout}`,
+    );
+  } finally {
+    ctx.cleanup();
+  }
+});
+
 test("an unset AVATAR is left out of the POST entirely", async () => {
   // So a client with no avatar configured never clears one set elsewhere.
   const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
