@@ -410,47 +410,9 @@ for (const tc of [
   });
 }
 
-// AVATAR is resolved to a plain URL on this side (see reporter/avatar.ts) so
-// the server only ever stores one string. These cover the wiring: resolved
-// value reaches the POST, unset stays out of it, malformed stops the run.
-test("AVATAR reaches the server as a resolved avatar_url", async () => {
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  try {
-    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "github:octocat" });
-    assert.equal(
-      result.status,
-      0,
-      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-    );
-    const captured = ctx.getCaptured();
-    assert.ok(captured, "server did not capture a POST body");
-    assert.equal(
-      captured.avatar_url,
-      "https://github.com/octocat.png?size=256",
-      "the shorthand must be resolved client-side, not posted raw",
-    );
-  } finally {
-    ctx.cleanup();
-  }
-});
-
-test("an unset AVATAR is left out of the POST entirely", async () => {
-  // So a client with no avatar configured never clears one set elsewhere.
-  const ctx = await setupE2E({ dailyJson: '{"daily":[]}' });
-  try {
-    const result = await runReporter({ ...ctx.baseEnv, AVATAR: "" });
-    assert.equal(result.status, 0, `reporter exited non-zero.\nstderr:\n${result.stderr}`);
-    const captured = ctx.getCaptured();
-    assert.ok(captured, "server did not capture a POST body");
-    assert.ok(
-      !("avatar_url" in captured),
-      `avatar_url must be absent, got ${JSON.stringify(captured.avatar_url)}`,
-    );
-  } finally {
-    ctx.cleanup();
-  }
-});
-
+// AVATAR's payload wiring — resolved value in, unset omitted — is covered by
+// the profile-prose rows above, which write a controlled .env first. What's
+// left here is the malformed case, which can't be a row: it aborts the run.
 test("a malformed AVATAR aborts before posting, without echoing its value", async () => {
   // Two contracts, one run, because a credential-bearing value exercises both.
   //
