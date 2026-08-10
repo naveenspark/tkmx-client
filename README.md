@@ -335,6 +335,15 @@ COMMUNITIES=bloomberg-ai-engineering,agentcribs-community
 - **PROJECTS** — What are you spending tokens on? The projects you're actively building with AI. Shows up as "building:" on your profile.
 - **COMMUNITIES** — What developer communities are you part of? Clickable filters on the Builder Index.
 
+> **⚠ Adding a badge is easy; removing one isn't.** These fields are **additive** — reporting a list adds any new entries to what your profile already shows, it does not replace the stored list. Deleting an entry from `.env` (or blanking the whole line) leaves the server's copy intact, so the badge stays up. Observed directly: a 5-entry `TOOLS` reported against a 14-entry stored list produced 17 badges, not 5, and a `PROJECTS` line with one project removed left both projects showing.
+>
+> Two consequences worth knowing before you edit:
+>
+> - **Typos are sticky.** A misspelled tool name becomes a permanent extra badge, and near-duplicates (`WisprFlow` / `Wispr Flow`) each render as their own chip — matching on write is case-insensitive but not whitespace-insensitive. Get the spelling right the first time.
+> - **There is no edit page.** The Builder Index profile is read-only; its only endpoints are the profile fetch and HN verification. Removing a badge currently needs a server-side change, so ask an admin.
+>
+> Your list is otherwise rendered exactly as stored — original order, no sorting, no de-duplication.
+
 ### Known Tools
 
 | Tool | Description |
