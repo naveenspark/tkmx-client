@@ -1,6 +1,6 @@
 # Builder Index Client
 
-Reports your Claude Code, Codex, Pi harness, and OpenCode token usage to the [Builder Index](https://www.watchmepivot.com/builder-index). Each user gets a shareable profile page at `www.watchmepivot.com/builder-index/u/YOUR_NAME`.
+Reports your Claude Code, Codex, Pi harness, and OpenCode token usage to the [Builder Index](https://aiworthusing.com/builder-index). Each user gets a shareable profile page at `aiworthusing.com/builder-index/u/YOUR_NAME`.
 
 ## Quick Start
 
@@ -63,14 +63,14 @@ npm install        # installs deps + builds dist/ (runs `npm run build` via prep
 Pick a unique username and provide your email. First come, first served.
 
 ```
-curl -s -X POST https://www.watchmepivot.com/api/register \
+curl -s -X POST https://aiworthusing.com/api/register \
   -H 'Content-Type: application/json' \
   -d '{"username":"YOUR_NAME", "email":"you@example.com"}'
 ```
 
-Save the returned API key — it cannot be retrieved later. The response `profile` is your Builder Index page (`https://www.watchmepivot.com/builder-index/u/YOUR_NAME`).
+Save the returned API key — it cannot be retrieved later. The response `profile` is your Builder Index page (`https://aiworthusing.com/builder-index/u/YOUR_NAME`).
 
-> **Hosts:** the public board is the **Builder Index** at `www.watchmepivot.com/builder-index`, and your profile is `www.watchmepivot.com/builder-index/u/YOUR_NAME`. Leave `SERVER_URL` unset — registration and reporting work out of the box.
+> **Hosts:** the public board is the **Builder Index** at `aiworthusing.com/builder-index`, and your profile is `aiworthusing.com/builder-index/u/YOUR_NAME`. Leave `SERVER_URL` unset — registration and reporting work out of the box.
 
 > Email is required at registration but kept private. It is never displayed or returned by any API.
 
@@ -210,7 +210,7 @@ You can always do a manual full re-sync of the token-usage rows by temporarily s
 
 The client supports reporting from multiple machines under the same username. Each machine gets its own `CLIENT_ID` (auto-generated on first run), and the server tracks data per-machine. Setup on each machine is identical — just use the same `USERNAME`, `API_KEY`, and `TEAM` in `.env`.
 
-Your [profile page](https://www.watchmepivot.com/builder-index) shows how many machines you're reporting from.
+Your [profile page](https://aiworthusing.com/builder-index) shows how many machines you're reporting from.
 
 ### Aggregating from synced remote machines
 
@@ -273,7 +273,7 @@ The override replaces the auto-discovered list entirely. Each directory is scann
 
 ## Profile Page
 
-Each user gets a shareable profile at `https://www.watchmepivot.com/builder-index/u/YOUR_NAME` showing:
+Each user gets a shareable profile at `https://aiworthusing.com/builder-index/u/YOUR_NAME` showing:
 
 - Token usage stats (28-day and all-time)
 - Claude vs Codex cost breakdown
@@ -312,7 +312,7 @@ To prevent fake accounts, new users must verify a Hacker News account to appear 
 
 1. Set `HN_USERNAME` in your `.env` (e.g. `HN_USERNAME=Sam_Odio`)
 2. Run `npm run report` so the server knows your HN username
-3. Add your Builder Index profile URL to your [HN about section](https://news.ycombinator.com/user). For example, see [Sam_Odio's HN profile](https://news.ycombinator.com/user?id=Sam_Odio) — the about field includes `https://www.watchmepivot.com/builder-index/u/samodio`
+3. Add your Builder Index profile URL — `https://aiworthusing.com/builder-index/u/YOUR_NAME` — to your [HN about section](https://news.ycombinator.com/user). For a live example, see [Sam_Odio's HN profile](https://news.ycombinator.com/user?id=Sam_Odio). If your about section already carries an older `watchmepivot.com` or `tkmx.odio.dev` profile URL, leave it — those still verify, so there's nothing to update.
 4. Visit your Builder Index profile and click "Verify"
 
 HN may cache your about section for a few minutes. If verification fails, wait a minute and try again.

@@ -445,8 +445,8 @@ async function main(): Promise<void> {
   const response = await postUsage(JSON.stringify(body));
   saveState(STATE_PATH, currentState);
 
-  // Human-facing profile lives on the Builder Index (watchmepivot), not the API host (SERVER_URL).
-  const profileUrl = `https://www.watchmepivot.com/builder-index/u/${USERNAME}`;
+  // Human-facing profile lives on the Builder Index (aiworthusing), not the API host (SERVER_URL).
+  const profileUrl = `https://aiworthusing.com/builder-index/u/${USERNAME}`;
   console.log(`  Profile: ${profileUrl}`);
 
   for (const f of PROFILE_FIELDS) {
