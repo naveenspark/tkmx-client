@@ -335,12 +335,22 @@ COMMUNITIES=bloomberg-ai-engineering,agentcribs-community
 - **PROJECTS** — What are you spending tokens on? The projects you're actively building with AI. Shows up as "building:" on your profile.
 - **COMMUNITIES** — What developer communities are you part of? Clickable filters on the Builder Index.
 
-> **⚠ Adding a badge is easy; removing one isn't.** These fields are **additive** — reporting a list adds any new entries to what your profile already shows, it does not replace the stored list. Deleting an entry from `.env` (or blanking the whole line) leaves the server's copy intact, so the badge stays up. Observed directly for `TOOLS` (a 5-entry list reported against a 14-entry stored list produced 17 badges, not 5) and for `PROJECTS` (a line with one project removed left both projects showing); `COMMUNITIES` is presumed to behave the same but hasn't been confirmed.
+> **⚠ Adding a badge is easy; removing one is a command.** These three fields are **additive** — reporting a list adds any new entries to what your profile already shows, it does not replace the stored list. Deleting an entry from `.env`, or blanking the whole line, leaves the server's copy intact and the badge stays up. All three fields behave the same way.
 >
-> Two consequences worth knowing before you edit:
+> Removal is a separate verb, and it's self-service — no admin needed:
 >
-> - **Typos are sticky.** A misspelled tool name becomes a permanent extra badge, and near-duplicates (`WisprFlow` / `Wispr Flow`) each render as their own chip — matching on write is case-insensitive but not whitespace-insensitive. Get the spelling right the first time.
-> - **There is no edit UI.** The Builder Index profile page is read-only, so removing a badge needs an admin.
+> ```
+> npm run untag -- --list                  # what the server actually has stored
+> npm run untag -- tools "WhsprFlow"       # remove one badge
+> npm run untag -- projects "Old Project"
+> ```
+>
+> Points worth knowing:
+>
+> - **Check the stored list first.** What's in your `.env` isn't necessarily what's on your profile — every machine that has ever reported is unioned into it, so the stored list is usually longer. `--list` shows the real thing, which is also the exact text a removal has to match.
+> - **Typos are sticky, but no longer permanent.** A misspelled tool name becomes an extra badge until you remove it by name.
+> - **Matching ignores case but not spacing.** `wispr flow` will remove `Wispr Flow`, but `WisprFlow` is a genuinely different badge and needs its own removal. That's also why near-duplicates appear in the first place.
+> - **Removal goes to the API host.** It uses `SERVER_URL` (the same host the reporter posts to), not the Builder Index address you visit in a browser. If you see a 404, that's the wrong host rather than a missing badge — the command says so.
 >
 > Your list is otherwise rendered exactly as stored — original order, no sorting, no de-duplication.
 
