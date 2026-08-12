@@ -36,6 +36,20 @@ function collectPersonalSkills(skillsDir: string): string[] {
   return names;
 }
 
+// Merges sources into one list. The same skill is spelled inconsistently across
+// sources — a plugin "Superpowers" and a skill directory "superpowers" are one
+// thing — so identity is the lowercased name, and the first spelling seen wins.
+// A case-sensitive Set would let both through, and near-duplicates render as
+// separate chips on a profile. Sorting keeps the machine-config hash stable.
+export function dedupeSkills(names: string[]): string[] {
+  const bySpelling = new Map<string, string>();
+  for (const name of names) {
+    const key = name.trim().toLowerCase();
+    if (key.length > 0 && !bySpelling.has(key)) bySpelling.set(key, name);
+  }
+  return Array.from(bySpelling.values()).sort((a, b) => a.localeCompare(b));
+}
+
 // Authoritative plugin list lives in installed_plugins.json — walking the
 // cache directly would pick up temp_git_* clones and their repo contents.
 export function collectClaudeSkills(
@@ -44,8 +58,7 @@ export function collectClaudeSkills(
 ): string[] {
   // Report one entry per installed plugin (e.g. "superpowers"), not one per
   // skill inside it — the plugin is the unit users recognize and share.
-  // Sorted output keeps the machine-config hash stable across runs.
-  const skills = new Set<string>();
+  const names: string[] = [];
 
   let parsed: PluginManifest | null = null;
   try {
@@ -58,12 +71,12 @@ export function collectClaudeSkills(
 
   for (const pluginKey of Object.keys(parsed?.plugins || {})) {
     // pluginKey looks like "superpowers@claude-plugins-official"
-    skills.add(pluginKey.split("@")[0]);
+    names.push(pluginKey.split("@")[0]);
   }
 
-  for (const name of collectPersonalSkills(skillsDir)) skills.add(name);
+  names.push(...collectPersonalSkills(skillsDir));
 
-  return Array.from(skills).sort();
+  return dedupeSkills(names);
 }
 
 // Drops names the user does not want published, applied last so it catches an

@@ -4,7 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { collectClaudeSkills, applyExclusions } from "../reporter/skills";
+import { collectClaudeSkills, applyExclusions, dedupeSkills } from "../reporter/skills";
 
 // Builds a personal-skills directory: each entry becomes <dir>/<name>/, and only
 // the ones listed in withSkillMd get a SKILL.md — the marker that makes a folder
@@ -148,6 +148,48 @@ describe("collectClaudeSkills — personal skills directory", () => {
     fs.symlinkSync(path.join(tmpDir, "does-not-exist"), path.join(dir, "dangling"));
 
     assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["roborev", "superpowers"]);
+  });
+});
+
+describe("dedupeSkills", () => {
+  // Exclusion matching is case-insensitive, so merging must be too. A
+  // case-sensitive Set would let "Superpowers" and "superpowers" both through,
+  // and near-duplicates render as two separate chips on a profile.
+  it("treats names differing only in case as one entry", () => {
+    assert.deepEqual(dedupeSkills(["Superpowers", "superpowers"]), ["Superpowers"]);
+  });
+
+  it("keeps the first spelling it saw", () => {
+    assert.deepEqual(dedupeSkills(["linear", "Linear"]), ["linear"]);
+    assert.deepEqual(dedupeSkills(["Linear", "linear"]), ["Linear"]);
+  });
+
+  it("sorts the result for a stable config hash", () => {
+    assert.deepEqual(dedupeSkills(["zebra", "alpha", "mango"]), ["alpha", "mango", "zebra"]);
+  });
+
+  it("drops empty and whitespace-only names", () => {
+    assert.deepEqual(dedupeSkills(["roborev", "", "   "]), ["roborev"]);
+  });
+});
+
+describe("collectClaudeSkills — case-insensitive merge across sources", () => {
+  let tmpDir;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-case-"));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("does not report a plugin and a personal skill that differ only in case", () => {
+    const manifestPath = path.join(tmpDir, "installed_plugins.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({ plugins: { "Superpowers@official": {} } }));
+    const dir = makeSkillsDir(tmpDir, ["superpowers"], ["superpowers"]);
+
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["Superpowers"]);
   });
 });
 

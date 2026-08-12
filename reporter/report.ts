@@ -14,7 +14,7 @@ import {
 import { collectOpenAIUsage } from "./openai";
 import { collectOpenclawUsage, discoverOpenclawSessionsDirs } from "./openclaw";
 import { mergeDailyUsage, type DailyUsage } from "./merge";
-import { collectClaudeSkills, applyExclusions } from "./skills";
+import { collectClaudeSkills, applyExclusions, dedupeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
@@ -210,20 +210,19 @@ function collectMachineConfig(): MachineConfig | null {
   try { cfg.codex_version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5000 }).trim(); } catch {}
   // MCP servers are a capability the profile has no row of its own for, so they
   // join the skills list rather than being collected and then never surfaced.
-  // Exclusions apply last, after every source has contributed, so a name is
-  // dropped no matter which one produced it.
+  // Each source is filtered once, then merged, so a name is dropped no matter
+  // which source produced it.
   const configStack = collectConfigStack();
-  const skills = applyExclusions(
-    Array.from(new Set([...collectClaudeSkills(), ...(configStack.mcp_servers || [])])).sort(),
-    process.env.SKILLS_EXCLUDE,
-  );
+  const mcpServers = applyExclusions(configStack.mcp_servers || [], process.env.SKILLS_EXCLUDE);
+  if (mcpServers.length > 0) configStack.mcp_servers = mcpServers;
+  else delete configStack.mcp_servers;
+
+  const skills = dedupeSkills([
+    ...applyExclusions(collectClaudeSkills(), process.env.SKILLS_EXCLUDE),
+    ...mcpServers,
+  ]);
   if (skills.length > 0) cfg.claude_skills = skills;
 
-  if (configStack.mcp_servers) {
-    const visible = applyExclusions(configStack.mcp_servers, process.env.SKILLS_EXCLUDE);
-    if (visible.length > 0) configStack.mcp_servers = visible;
-    else delete configStack.mcp_servers;
-  }
   Object.assign(cfg, configStack);
   const cfgJson = JSON.stringify(cfg);
   const cfgHash = crypto.createHash("sha256").update(cfgJson).digest("hex").slice(0, 16);

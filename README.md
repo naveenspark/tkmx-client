@@ -391,7 +391,9 @@ Set `SKILLS_EXCLUDE` to keep specific entries off your profile. It is a comma-se
 SKILLS_EXCLUDE=warp,clerk-setup,clerk-testing
 ```
 
-Two caveats worth knowing. Your profile shows the **union across all your machines**, so an entry disappears only once every machine that reports it has stopped — excluding something on one machine is not enough. And if a separate application also reports on your behalf, it publishes its own list, which this setting cannot reach.
+Excluding a name does retract one already published. This is worth stating explicitly because the badge fields above (`TOOLS`, `PROJECTS`) behave the opposite way — they are additive, and blanking them leaves the server's copy intact. Skills are not: each machine's list is stored under that machine and replaced wholesale on every report. Verified against production on 2026-08-12 by excluding a previously-published entry and watching it disappear from that machine's stored `machine_config.claude_skills`.
+
+Two caveats still apply. Your profile shows the **union across all your machines**, so an entry disappears only once every machine that reports it has excluded it — doing so on one machine is not enough. And if a separate application also reports on your behalf, it publishes its own list, which this setting cannot reach.
 
 ## Cost Estimation
 
