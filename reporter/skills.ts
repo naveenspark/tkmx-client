@@ -13,27 +13,16 @@ interface PluginManifest {
 // holding a SKILL.md. The marker file is what separates a skill from a stray
 // directory, so a folder without one is not reported.
 function collectPersonalSkills(skillsDir: string): string[] {
-  let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(skillsDir, { withFileTypes: true });
+    // The SKILL.md probe is the whole test, and it follows symlinks — which
+    // matters because skills are commonly linked in from a shared repo rather
+    // than copied. It also settles every other case on its own: a loose file has
+    // no children, and a dangling link resolves to nothing.
+    return fs.readdirSync(skillsDir)
+      .filter((name) => fs.existsSync(path.join(skillsDir, name, "SKILL.md")));
   } catch {
     return [];
   }
-
-  const names: string[] = [];
-  for (const entry of entries) {
-    // Skills are often symlinked in from a shared repo rather than copied, and
-    // Dirent.isDirectory() reports false for a symlink. statSync follows the
-    // link — and throws on a dangling one, which we simply skip.
-    const entryPath = path.join(skillsDir, entry.name);
-    try {
-      if (!fs.statSync(entryPath).isDirectory()) continue;
-    } catch {
-      continue;
-    }
-    if (fs.existsSync(path.join(entryPath, "SKILL.md"))) names.push(entry.name);
-  }
-  return names;
 }
 
 // Merges sources into one list. The same skill is spelled inconsistently across

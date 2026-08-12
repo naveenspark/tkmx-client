@@ -46,48 +46,46 @@ describe("config-stack", () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
-    function write(settings) {
-      fs.writeFileSync(settingsPath, JSON.stringify(settings));
-      return settingsPath;
+    const permissionCases = [
+      {
+        name: "derives server names when there is no mcpServers block at all",
+        settings: { permissions: { allow: [
+          "mcp__sparkle-orchestrator__*",
+          "mcp__sparkle-control__*",
+          "mcp__claude-in-chrome__navigate",
+        ] } },
+        expected: ["claude-in-chrome", "sparkle-control", "sparkle-orchestrator"],
+      },
+      {
+        name: "merges an explicit mcpServers block with the derived names",
+        settings: { mcpServers: { linear: {} }, permissions: { allow: ["mcp__sparkle-control__*"] } },
+        expected: ["linear", "sparkle-control"],
+      },
+      {
+        name: "deduplicates a server that appears in both places",
+        settings: { mcpServers: { "sparkle-control": {} }, permissions: { allow: ["mcp__sparkle-control__*"] } },
+        expected: ["sparkle-control"],
+      },
+      {
+        name: "ignores permission entries that are not MCP tools",
+        settings: { permissions: { allow: ["Bash(npm run test:*)", "Read", "mcp__linear__*"] } },
+        expected: ["linear"],
+      },
+      {
+        name: "never leaks the tool name, only the server",
+        settings: { permissions: { allow: ["mcp__linear__create_issue_with_secret_token"] } },
+        expected: ["linear"],
+      },
+    ];
+
+    for (const { name, settings, expected } of permissionCases) {
+      it(name, () => {
+        fs.writeFileSync(settingsPath, JSON.stringify(settings));
+        assert.deepEqual(collectMcpServers(settingsPath), expected);
+      });
     }
 
-    it("derives server names when there is no mcpServers block at all", () => {
-      write({ permissions: { allow: [
-        "mcp__sparkle-orchestrator__*",
-        "mcp__sparkle-control__*",
-        "mcp__claude-in-chrome__navigate",
-      ] } });
-      assert.deepEqual(collectMcpServers(settingsPath), [
-        "claude-in-chrome", "sparkle-control", "sparkle-orchestrator",
-      ]);
-    });
-
-    it("merges an explicit mcpServers block with the derived names", () => {
-      write({
-        mcpServers: { linear: {} },
-        permissions: { allow: ["mcp__sparkle-control__*"] },
-      });
-      assert.deepEqual(collectMcpServers(settingsPath), ["linear", "sparkle-control"]);
-    });
-
-    it("deduplicates a server that appears in both places", () => {
-      write({
-        mcpServers: { "sparkle-control": {} },
-        permissions: { allow: ["mcp__sparkle-control__*"] },
-      });
-      assert.deepEqual(collectMcpServers(settingsPath), ["sparkle-control"]);
-    });
-
-    it("ignores permission entries that are not MCP tools", () => {
-      write({ permissions: { allow: ["Bash(npm run test:*)", "Read", "mcp__linear__*"] } });
-      assert.deepEqual(collectMcpServers(settingsPath), ["linear"]);
-    });
-
-    it("never leaks the tool name, only the server", () => {
-      write({ permissions: { allow: ["mcp__linear__create_issue_with_secret_token"] } });
-      assert.deepEqual(collectMcpServers(settingsPath), ["linear"]);
-    });
-
+    // Kept separate: these assert on unreadable input rather than on parsing.
     it("returns [] for a missing or malformed settings file", () => {
       assert.deepEqual(collectMcpServers(path.join(tmpDir, "gone.json")), []);
       fs.writeFileSync(settingsPath, "{ not json");

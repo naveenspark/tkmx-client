@@ -192,7 +192,14 @@ interface MachineConfig {
   [key: string]: unknown;
 }
 
-function collectMachineConfig(): MachineConfig | null {
+// Returned instead of a bare config so the caller can record delivery only once
+// the POST carrying it has succeeded.
+interface PendingMachineConfig {
+  config: MachineConfig;
+  commit: () => void;
+}
+
+function collectMachineConfig(): PendingMachineConfig | null {
   if (process.env.REPORT_MACHINE_CONFIG !== "true") return null;
 
   const cfg: MachineConfig = { hostname: os.hostname(), os: os.platform() + " " + os.release(), cpu: "", memory_gb: Math.round(os.totalmem() / 1e9) };
@@ -229,9 +236,14 @@ function collectMachineConfig(): MachineConfig | null {
   const hashFile = path.join(PROJECT_ROOT, ".machine_config_hash");
   const lastHash = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, "utf-8").trim() : "";
   if (cfgHash !== lastHash) {
-    fs.writeFileSync(hashFile, cfgHash);
     console.log("  Machine config changed, will report");
-    return cfg;
+    // The hash is the record of what the server has, so it is only written once
+    // the POST carrying this snapshot has actually succeeded. Writing it here
+    // would make a failed request look delivered: the next run would match the
+    // saved hash, omit machine_config, and leave the profile stale until some
+    // unrelated config change happened to move the hash again. saveState below
+    // already defers for the same reason.
+    return { config: cfg, commit: () => fs.writeFileSync(hashFile, cfgHash) };
   }
   return null;
 }
@@ -423,7 +435,7 @@ async function main(): Promise<void> {
   if (AVATAR_URL) body.avatar_url = AVATAR_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
-  if (machineConfig) body.machine_config = machineConfig;
+  if (machineConfig) body.machine_config = machineConfig.config;
 
   const priorState = loadState(STATE_PATH);
   const currentState = {
@@ -456,6 +468,7 @@ async function main(): Promise<void> {
   if ("session_stats" in markers) body.session_stats = null;
 
   const response = await postUsage(JSON.stringify(body));
+  machineConfig?.commit();
   saveState(STATE_PATH, currentState);
 
   // Human-facing profile lives on the Builder Index (aiworthusing), not the API host (SERVER_URL).

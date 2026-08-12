@@ -194,30 +194,30 @@ describe("collectClaudeSkills — case-insensitive merge across sources", () => 
 });
 
 describe("applyExclusions", () => {
-  it("removes excluded names regardless of which source produced them", () => {
-    assert.deepEqual(applyExclusions(["roborev", "superpowers", "warp"], "warp"), ["roborev", "superpowers"]);
-  });
+  const exclusionCases = [
+    { name: "removes excluded names regardless of which source produced them",
+      names: ["roborev", "superpowers", "warp"], exclude: "warp", expected: ["roborev", "superpowers"] },
+    { name: "matches a differently-cased entry",
+      names: ["Warp", "roborev"], exclude: "warp", expected: ["roborev"] },
+    { name: "matches a differently-cased exclusion",
+      names: ["warp", "roborev"], exclude: "WARP", expected: ["roborev"] },
+    { name: "tolerates whitespace around entries",
+      names: ["warp", "vercel", "roborev"], exclude: " warp , vercel ", expected: ["roborev"] },
+    { name: "excludes nothing when unset",
+      names: ["warp", "roborev"], exclude: undefined, expected: ["warp", "roborev"] },
+    { name: "excludes nothing when empty",
+      names: ["warp", "roborev"], exclude: "", expected: ["warp", "roborev"] },
+    { name: "excludes nothing when whitespace only",
+      names: ["warp", "roborev"], exclude: "   ", expected: ["warp", "roborev"] },
+    { name: "ignores empty entries produced by stray commas",
+      names: ["warp", "roborev"], exclude: "warp,,", expected: ["roborev"] },
+    { name: "preserves the incoming order of the survivors",
+      names: ["a", "b", "c"], exclude: "b", expected: ["a", "c"] },
+  ];
 
-  it("matches case-insensitively", () => {
-    assert.deepEqual(applyExclusions(["Warp", "roborev"], "warp"), ["roborev"]);
-    assert.deepEqual(applyExclusions(["warp", "roborev"], "WARP"), ["roborev"]);
-  });
-
-  it("tolerates whitespace around entries", () => {
-    assert.deepEqual(applyExclusions(["warp", "vercel", "roborev"], " warp , vercel "), ["roborev"]);
-  });
-
-  it("excludes nothing when unset or empty", () => {
-    assert.deepEqual(applyExclusions(["warp", "roborev"], undefined), ["warp", "roborev"]);
-    assert.deepEqual(applyExclusions(["warp", "roborev"], ""), ["warp", "roborev"]);
-    assert.deepEqual(applyExclusions(["warp", "roborev"], "   "), ["warp", "roborev"]);
-  });
-
-  it("ignores empty entries produced by stray commas", () => {
-    assert.deepEqual(applyExclusions(["warp", "roborev"], "warp,,"), ["roborev"]);
-  });
-
-  it("preserves the incoming order of the survivors", () => {
-    assert.deepEqual(applyExclusions(["a", "b", "c"], "b"), ["a", "c"]);
-  });
+  for (const { name, names, exclude, expected } of exclusionCases) {
+    it(name, () => {
+      assert.deepEqual(applyExclusions(names, exclude), expected);
+    });
+  }
 });
