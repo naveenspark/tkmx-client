@@ -164,8 +164,14 @@ describe("dedupeSkills", () => {
     assert.deepEqual(dedupeSkills(["Linear", "linear"]), ["Linear"]);
   });
 
-  it("sorts the result for a stable config hash", () => {
-    assert.deepEqual(dedupeSkills(["zebra", "alpha", "mango"]), ["alpha", "mango", "zebra"]);
+  // Deliberately a capital that must sort BEFORE an earlier lowercase letter.
+  // All-lowercase inputs order identically under the default comparator and
+  // under localeCompare, so they cannot tell the two apart — and the comparator
+  // is the point: this order feeds the config hash that gates reporting, and a
+  // locale-aware one collates differently between the interactive and launchd
+  // environments, flipping the hash on alternating runs.
+  it("sorts by code unit, not locale, for a stable config hash", () => {
+    assert.deepEqual(dedupeSkills(["alpha", "Zebra"]), ["Zebra", "alpha"]);
   });
 
   it("drops empty and whitespace-only names", () => {
