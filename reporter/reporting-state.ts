@@ -1,4 +1,23 @@
 import * as fs from "node:fs";
+import * as crypto from "node:crypto";
+
+// Guards a snapshot that is only worth sending when it has changed, while
+// keeping "changed" and "delivered" separate. The hash is the record of what
+// the server holds, so writing it at collection time would make an undelivered
+// snapshot look delivered: the next run would match the stored hash, omit the
+// snapshot, and leave the server stale until some unrelated edit moved the hash
+// again. Callers therefore get a commit() to invoke once delivery is confirmed.
+export interface DeliveryGate {
+  commit: () => void;
+}
+
+export function gateOnSnapshotHash(snapshot: unknown, hashFile: string): DeliveryGate | null {
+  const hash = crypto.createHash("sha256").update(JSON.stringify(snapshot)).digest("hex").slice(0, 16);
+  let lastHash = "";
+  try { lastHash = fs.readFileSync(hashFile, "utf-8").trim(); } catch {}
+  if (hash === lastHash) return null;
+  return { commit: () => fs.writeFileSync(hashFile, hash, "utf-8") };
+}
 
 export interface ReportingState {
   dev_stats_on: boolean;

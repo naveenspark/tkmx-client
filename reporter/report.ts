@@ -18,7 +18,7 @@ import { collectClaudeSkills, applyExclusions, dedupeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
-import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
+import { loadState, saveState, computeTransitionMarkers, gateOnSnapshotHash } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
 import { resolveAvatarUrl } from "./avatar";
 import { errMessage } from "./errors";
@@ -231,21 +231,12 @@ function collectMachineConfig(): PendingMachineConfig | null {
   if (skills.length > 0) cfg.claude_skills = skills;
 
   Object.assign(cfg, configStack);
-  const cfgJson = JSON.stringify(cfg);
-  const cfgHash = crypto.createHash("sha256").update(cfgJson).digest("hex").slice(0, 16);
-  const hashFile = path.join(PROJECT_ROOT, ".machine_config_hash");
-  const lastHash = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, "utf-8").trim() : "";
-  if (cfgHash !== lastHash) {
-    console.log("  Machine config changed, will report");
-    // The hash is the record of what the server has, so it is only written once
-    // the POST carrying this snapshot has actually succeeded. Writing it here
-    // would make a failed request look delivered: the next run would match the
-    // saved hash, omit machine_config, and leave the profile stale until some
-    // unrelated config change happened to move the hash again. saveState below
-    // already defers for the same reason.
-    return { config: cfg, commit: () => fs.writeFileSync(hashFile, cfgHash) };
-  }
-  return null;
+  // The gate keeps "changed" and "delivered" separate; commit() runs only once
+  // the POST carrying this snapshot has succeeded, as saveState below already does.
+  const gate = gateOnSnapshotHash(cfg, path.join(PROJECT_ROOT, ".machine_config_hash"));
+  if (!gate) return null;
+  console.log("  Machine config changed, will report");
+  return { config: cfg, commit: gate.commit };
 }
 
 interface ServerResponse {
@@ -468,7 +459,12 @@ async function main(): Promise<void> {
   if ("session_stats" in markers) body.session_stats = null;
 
   const response = await postUsage(JSON.stringify(body));
-  machineConfig?.commit();
+  // A frozen profile answers 200 but stays on its last snapshot, so what we just
+  // sent was not applied. Recording it as delivered would strand the config the
+  // same way a failed POST would — the next run would match the stored hash and
+  // omit it. Leaving it uncommitted costs one redundant resend if a frozen
+  // profile does apply machine_config, which is the cheaper way to be wrong.
+  if (!response?.profile_frozen) machineConfig?.commit();
   saveState(STATE_PATH, currentState);
 
   // Human-facing profile lives on the Builder Index (aiworthusing), not the API host (SERVER_URL).
