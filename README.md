@@ -354,6 +354,8 @@ COMMUNITIES=bloomberg-ai-engineering,agentcribs-community
 > - **Removal goes to the API host.** It uses `SERVER_URL` (the same host the reporter posts to), not the Builder Index address you visit in a browser. If you see a 404, that's the wrong host rather than a missing badge — the command says so.
 > - **A badge containing `/` can't be removed by this command.** The badge text travels as part of the URL, and a slash can't be addressed there. Nothing stops you *creating* one — whatever you put in `TOOLS` is sent as-is — so avoid slashes in badge names, and ask an admin if you already have one.
 >
+> The underlying endpoint is specified in the server's OpenAPI document (`/openapi.yaml` on the API host) if you'd rather call it directly.
+>
 > Your list is otherwise rendered exactly as stored — original order, no sorting, no de-duplication.
 
 ### Known Tools
