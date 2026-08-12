@@ -459,13 +459,22 @@ async function main(): Promise<void> {
   if ("session_stats" in markers) body.session_stats = null;
 
   const response = await postUsage(JSON.stringify(body));
-  // A frozen profile answers 200 but stays on its last snapshot, so what we just
-  // sent was not applied. Recording it as delivered would strand the config the
-  // same way a failed POST would — the next run would match the stored hash and
-  // omit it. Leaving it uncommitted costs one redundant resend if a frozen
-  // profile does apply machine_config, which is the cheaper way to be wrong.
-  if (!response?.profile_frozen) machineConfig?.commit();
-  saveState(STATE_PATH, currentState);
+  // A frozen profile answers 200 but stays on its last snapshot, so nothing we
+  // just sent was applied. Both writes below record "the server has this now",
+  // so both wait on the same condition: the config hash, and the reporting state
+  // whose transition markers are one-shot — clear_dev_stats and session_stats
+  // fire only on the local prior→current edge, so persisting that edge against a
+  // server that ignored it consumes the signal for good, leaving stale stats
+  // until some later toggle happens to re-trigger it.
+  //
+  // The server's exact freeze semantics are not visible from here. The asymmetry
+  // settles it: gating costs a redundant resend each cycle until the profile
+  // unfreezes, while not gating costs data the server never receives and nothing
+  // reports as missing.
+  if (!response?.profile_frozen) {
+    machineConfig?.commit();
+    saveState(STATE_PATH, currentState);
+  }
 
   // Human-facing profile lives on the Builder Index (aiworthusing), not the API host (SERVER_URL).
   const profileUrl = `https://aiworthusing.com/builder-index/u/${USERNAME}`;

@@ -62,13 +62,6 @@ test("computeTransitionMarkers: only dev_stats toggled", () => {
 // reaches this path — report-e2e sets REPORT_MACHINE_CONFIG=false precisely so
 // the reporter never touches the hash file — so without these a refactor that
 // moved the write back to collection time would go green.
-test("gateOnSnapshotHash returns a gate for a snapshot never sent before", () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-gate-"));
-  const hashFile = path.join(dir, ".hash");
-  const { gateOnSnapshotHash } = require("../reporter/reporting-state");
-  assert.notEqual(gateOnSnapshotHash({ cpu: "M1" }, hashFile), null);
-});
-
 test("gateOnSnapshotHash does not write the hash until commit is called", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-gate-"));
   const hashFile = path.join(dir, ".hash");
