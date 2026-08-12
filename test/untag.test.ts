@@ -98,19 +98,17 @@ test("refuses a badge containing a slash rather than sending an unaddressable re
 // this URL; without it the request is byte-identical to the one before the
 // removal and can be served from cache.
 test("the list URL carries a cache-busting nonce", () => {
-  const url = buildListUrl(HOST, "DROdio", 1234567890);
-  assert.equal(url.pathname, "/api/user/DROdio");
-  assert.equal(url.searchParams.get("_"), "1234567890");
-});
-
-test("a different nonce produces a different URL", () => {
-  const a = buildListUrl(HOST, "DROdio", 1);
-  const b = buildListUrl(HOST, "DROdio", 2);
-  assert.notEqual(a.toString(), b.toString());
-});
-
-test("the list URL encodes the username", () => {
-  assert.equal(buildListUrl(HOST, "a b", 1).pathname, "/api/user/a%20b");
+  assert.equal(
+    buildListUrl(HOST, "a b", 123).toString(),
+    "https://api.example.com/api/user/a%20b?_=123",
+  );
+  // The exact URL above pins encoding and serialisation but would still pass if
+  // the nonce were ignored and "_=123" hard-coded — which is precisely the
+  // regression that silently brings the cache bug back. One line closes that.
+  assert.notEqual(
+    buildListUrl(HOST, "a b", 124).toString(),
+    buildListUrl(HOST, "a b", 123).toString(),
+  );
 });
 
 // ---- response interpretation ------------------------------------------------
