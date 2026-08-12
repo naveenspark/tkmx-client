@@ -14,17 +14,24 @@ export const SYSTEMD_UNIT_BASENAME = "token-tracking-reporter";
 // is a versioned Cellar path like `/opt/homebrew/Cellar/node/25.8.1_1/bin/node`.
 // Baking that into a launchd plist is a ticking time bomb: the next
 // `brew upgrade node` deletes that cellar dir and the service starts failing
-// silently with dyld "Library not loaded" errors. Rewrite cellar paths to the
-// stable `<prefix>/bin/node` symlink that brew keeps pointing at the current
-// version. nvm has the same fragility but no equivalent stable symlink, so we
-// warn instead.
+// silently with dyld "Library not loaded" errors. Rewrite cellar paths to
+// `<prefix>/opt/<formula>/bin/node`, the symlink brew keeps pointing at the
+// formula's current keg.
+//
+// `opt/<formula>` rather than `<prefix>/bin/node` because versioned formulae
+// (`node@22`) are keg-only: brew never links them into `<prefix>/bin`, so that
+// path is either missing or — worse — the *unversioned* formula, a different
+// major. `opt/` is the one form that resolves correctly for both.
+//
+// nvm has the same fragility but no equivalent stable symlink, so we warn
+// instead.
 export function stableNodePath(
   execPath: string,
   { existsSync = fs.existsSync }: { existsSync?: (p: string) => boolean } = {},
 ): string {
-  const brewMatch = execPath.match(/^(.*)\/Cellar\/node\/[^/]+\/bin\/node$/);
+  const brewMatch = execPath.match(/^(.*)\/Cellar\/(node(?:@[^/]+)?)\/[^/]+\/bin\/node$/);
   if (brewMatch) {
-    const stable = `${brewMatch[1]}/bin/node`;
+    const stable = `${brewMatch[1]}/opt/${brewMatch[2]}/bin/node`;
     if (existsSync(stable)) return stable;
   }
   return execPath;
