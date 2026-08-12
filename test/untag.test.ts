@@ -13,35 +13,31 @@ const CTX = { field: "tools", tag: "WhsprFlow", host: "api.example.com" } as con
 
 // ---- argument parsing -------------------------------------------------------
 
-test("parses a field and a badge", () => {
-  assert.deepEqual(parseUntagArgs(["tools", "Warp"]), {
-    mode: "remove",
-    field: "tools",
-    tag: "Warp",
+// The per-field rows are derived from TAG_FIELDS rather than spelled out, so a
+// field added later is covered without anyone remembering to add a row here.
+const ACCEPTED = [
+  { name: "a field and a badge", argv: ["tools", "Warp"], expected: { mode: "remove", field: "tools", tag: "Warp" } },
+  ...TAG_FIELDS.map((field) => ({
+    name: `${field} is a removable field`,
+    argv: [field, "x"],
+    expected: { mode: "remove", field, tag: "x" },
+  })),
+  { name: "--list asks for the stored lists", argv: ["--list"], expected: { mode: "list" } },
+  // A badge whose text has meaningful inner spacing must survive intact —
+  // trimming the ends is a convenience, collapsing the middle would change
+  // which badge gets removed.
+  {
+    name: "outer whitespace is trimmed, inner spacing is preserved",
+    argv: ["tools", "  Wispr Flow  "],
+    expected: { mode: "remove", field: "tools", tag: "Wispr Flow" },
+  },
+];
+
+for (const { name, argv, expected } of ACCEPTED) {
+  test(`accepted — ${name}`, () => {
+    assert.deepEqual(parseUntagArgs(argv), expected);
   });
-});
-
-test("every declared field is accepted", () => {
-  for (const field of TAG_FIELDS) {
-    assert.deepEqual(parseUntagArgs([field, "x"]), { mode: "remove", field, tag: "x" });
-  }
-});
-
-test("--list and -l both ask for the stored lists", () => {
-  assert.deepEqual(parseUntagArgs(["--list"]), { mode: "list" });
-  assert.deepEqual(parseUntagArgs(["-l"]), { mode: "list" });
-});
-
-// A badge whose text has meaningful inner spacing must survive intact —
-// trimming the ends is a convenience, collapsing the middle would change which
-// badge gets removed.
-test("outer whitespace is trimmed, inner spacing is preserved", () => {
-  assert.deepEqual(parseUntagArgs(["tools", "  Wispr Flow  "]), {
-    mode: "remove",
-    field: "tools",
-    tag: "Wispr Flow",
-  });
-});
+}
 
 // Each rejection pins the reason it fails FOR — a bare assert.throws would pass
 // on any error, so a value rejected for the wrong reason would look correct.

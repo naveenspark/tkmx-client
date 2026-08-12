@@ -347,10 +347,12 @@ COMMUNITIES=bloomberg-ai-engineering,agentcribs-community
 >
 > Points worth knowing:
 >
+> - **Clear it from every machine first, or it comes back.** Removal takes the badge off the server; it does not stop a machine from sending it again. Any machine whose `.env` (or exported shell variable) still lists that badge will re-add it on its next report, and reporting is usually running on a timer. Delete it from **every** reporting configuration, then remove it — otherwise you're racing the scheduler.
 > - **Check the stored list first.** What's in your `.env` isn't necessarily what's on your profile — every machine that has ever reported is unioned into it, so the stored list is usually longer. `--list` shows the real thing, which is also the exact text a removal has to match.
 > - **Typos are sticky, but no longer permanent.** A misspelled tool name becomes an extra badge until you remove it by name.
 > - **Matching ignores case but not spacing.** `wispr flow` will remove `Wispr Flow`, but `WisprFlow` is a genuinely different badge and needs its own removal. That's also why near-duplicates appear in the first place.
 > - **Removal goes to the API host.** It uses `SERVER_URL` (the same host the reporter posts to), not the Builder Index address you visit in a browser. If you see a 404, that's the wrong host rather than a missing badge — the command says so.
+> - **A badge containing `/` can't be removed by this command.** The badge text travels as part of the URL, and a slash can't be addressed there. Nothing stops you *creating* one — whatever you put in `TOOLS` is sent as-is — so avoid slashes in badge names, and ask an admin if you already have one.
 >
 > Your list is otherwise rendered exactly as stored — original order, no sorting, no de-duplication.
 

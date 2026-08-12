@@ -18,15 +18,16 @@
 
 import * as http from "node:http";
 import * as https from "node:https";
+import { errMessage } from "./errors";
 
 export const TAG_FIELDS = ["tools", "projects", "communities"] as const;
-export type TagField = (typeof TAG_FIELDS)[number];
+type TagField = (typeof TAG_FIELDS)[number];
 
-export type UntagArgs =
+type UntagArgs =
   | { mode: "list" }
   | { mode: "remove"; field: TagField; tag: string };
 
-export const USAGE =
+const USAGE =
   'usage: npm run untag -- <tools|projects|communities> "<exact badge text>"\n' +
   "       npm run untag -- --list";
 
@@ -39,7 +40,7 @@ function isTagField(value: string): value is TagField {
 // right one looks like rather than silently doing nothing.
 export function parseUntagArgs(argv: readonly string[]): UntagArgs {
   const args = argv.filter((a) => a !== "");
-  if (args.length === 1 && (args[0] === "--list" || args[0] === "-l")) {
+  if (args.length === 1 && args[0] === "--list") {
     return { mode: "list" };
   }
   if (args.length !== 2) {
@@ -61,8 +62,12 @@ export function parseUntagArgs(argv: readonly string[]): UntagArgs {
 // reliably preserved across the proxy in front of the API, so the request may
 // route somewhere else entirely and report a cheerful no-op. Refusing here is
 // honest — the alternative is telling someone their badge was removed when it
-// wasn't. No badge added by this client contains a slash, so this is a guard
-// against a stored value that got there some other way.
+// wasn't.
+//
+// This is a reachable state, not a defensive guard: the reporter sends TOOLS
+// verbatim, so putting "a/b" in .env creates a badge that this command then
+// cannot take off again. Removal for those needs a request that carries the tag
+// in the body rather than the path.
 export function buildUntagUrl(
   serverUrl: string,
   username: string,
@@ -80,7 +85,7 @@ export function buildUntagUrl(
   return new URL(path, serverUrl);
 }
 
-export type UntagOutcome = { ok: boolean; message: string };
+type UntagOutcome = { ok: boolean; message: string };
 
 // Turns an HTTP response into something worth printing. Each status gets its
 // own explanation because they fail for genuinely different reasons and the
@@ -139,29 +144,12 @@ export function describeUntagResult(
   };
 }
 
-export type HttpResult = { status: number; body: string };
+type HttpResult = { status: number; body: string };
 
-export function requestDelete(url: URL, apiKey: string): Promise<HttpResult> {
+function request(url: URL, options: http.RequestOptions): Promise<HttpResult> {
   const transport = url.protocol === "https:" ? https : http;
   return new Promise((resolve, reject) => {
-    const req = transport.request(
-      url,
-      { method: "DELETE", headers: { Authorization: `Bearer ${apiKey}` } },
-      (res) => {
-        let body = "";
-        res.on("data", (chunk) => (body += chunk));
-        res.on("end", () => resolve({ status: res.statusCode || 0, body }));
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-export function requestJson(url: URL): Promise<HttpResult> {
-  const transport = url.protocol === "https:" ? https : http;
-  return new Promise((resolve, reject) => {
-    const req = transport.request(url, { method: "GET" }, (res) => {
+    const req = transport.request(url, options, (res) => {
       let body = "";
       res.on("data", (chunk) => (body += chunk));
       res.on("end", () => resolve({ status: res.statusCode || 0, body }));
@@ -212,7 +200,7 @@ async function main(): Promise<void> {
 
   if (args.mode === "list") {
     const url = new URL(`/api/user/${encodeURIComponent(username)}`, serverUrl);
-    const { status, body } = await requestJson(url);
+    const { status, body } = await request(url, { method: "GET" });
     if (status !== 200) {
       console.error(`Server returned ${status}: ${body}`);
       process.exit(1);
@@ -222,7 +210,10 @@ async function main(): Promise<void> {
   }
 
   const url = buildUntagUrl(serverUrl, username, args.field, args.tag);
-  const { status, body } = await requestDelete(url, apiKey);
+  const { status, body } = await request(url, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${apiKey}` },
+  });
   const outcome = describeUntagResult(status, body, {
     field: args.field,
     tag: args.tag,
@@ -234,7 +225,7 @@ async function main(): Promise<void> {
 
 if (require.main === module) {
   main().catch((err: unknown) => {
-    console.error(err instanceof Error ? err.message : String(err));
+    console.error(errMessage(err));
     process.exit(1);
   });
 }
