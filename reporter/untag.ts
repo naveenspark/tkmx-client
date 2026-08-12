@@ -85,6 +85,23 @@ export function buildUntagUrl(
   return new URL(path, serverUrl);
 }
 
+// The profile read is served with `cache-control: public` and no `max-age`, so
+// a plain GET can return a copy from before a removal that has already
+// succeeded. That is the worst possible failure for this command: `--list` is
+// how you CHECK a removal, so a stale read reports the badge still present and
+// makes a working removal look like it did nothing. Observed for real — a list
+// taken straight after five successful removals showed all five still present,
+// while the same URL with a unique query param showed them gone.
+//
+// A unique parameter is what actually fixes it. `Cache-Control: no-cache` and
+// `Pragma: no-cache` request headers were both tried against the live host and
+// neither bypassed it; only varying the URL did.
+export function buildListUrl(serverUrl: string, username: string, nonce: number): URL {
+  const url = new URL(`/api/user/${encodeURIComponent(username)}`, serverUrl);
+  url.searchParams.set("_", String(nonce));
+  return url;
+}
+
 type UntagOutcome = { ok: boolean; message: string };
 
 // Turns an HTTP response into something worth printing. Each status gets its
@@ -199,7 +216,7 @@ async function main(): Promise<void> {
   const args = parseUntagArgs(process.argv.slice(2));
 
   if (args.mode === "list") {
-    const url = new URL(`/api/user/${encodeURIComponent(username)}`, serverUrl);
+    const url = buildListUrl(serverUrl, username, Date.now());
     const { status, body } = await request(url, { method: "GET" });
     if (status !== 200) {
       console.error(`Server returned ${status}: ${body}`);
