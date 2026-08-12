@@ -23,18 +23,17 @@ export const SYSTEMD_UNIT_BASENAME = "token-tracking-reporter";
 // path is either missing or — worse — the *unversioned* formula, a different
 // major. `opt/` is the one form that resolves correctly for both.
 //
+// brew maintains `opt/<formula>` for every formula it has installed — it's what
+// `brew --prefix <formula>` resolves to — so a Cellar match implies the symlink
+// and there's nothing to probe for. A missing one would mean a half-deleted brew
+// prefix, where a unit that won't start is the loud break we want over silently
+// re-baking the Cellar path this function exists to remove.
+//
 // nvm has the same fragility but no equivalent stable symlink, so we warn
 // instead.
-export function stableNodePath(
-  execPath: string,
-  { existsSync = fs.existsSync }: { existsSync?: (p: string) => boolean } = {},
-): string {
+export function stableNodePath(execPath: string): string {
   const brewMatch = execPath.match(/^(.*)\/Cellar\/(node(?:@[^/]+)?)\/[^/]+\/bin\/node$/);
-  if (brewMatch) {
-    const stable = `${brewMatch[1]}/opt/${brewMatch[2]}/bin/node`;
-    if (existsSync(stable)) return stable;
-  }
-  return execPath;
+  return brewMatch ? `${brewMatch[1]}/opt/${brewMatch[2]}/bin/node` : execPath;
 }
 
 function warnIfFragileNodePath(execPath: string): void {

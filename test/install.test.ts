@@ -19,19 +19,15 @@ import {
 describe("stableNodePath", () => {
   // A brew Cellar path is rewritten to the formula's `opt/` symlink, which
   // survives `brew upgrade`; every other path is passed through untouched.
-  // `exists: true` stands in for "every path exists", so the pass-through
-  // rows prove the input didn't match rather than that the guard caught it.
-  const cases: Array<{ name: string; input: string; exists: string[] | true; want?: string }> = [
+  const cases: Array<{ name: string; input: string; want?: string }> = [
     {
       name: "rewrites an Apple Silicon cellar path to the opt symlink",
       input: "/opt/homebrew/Cellar/node/25.8.1_1/bin/node",
-      exists: ["/opt/homebrew/opt/node/bin/node"],
       want: "/opt/homebrew/opt/node/bin/node",
     },
     {
       name: "rewrites an Intel cellar path to the opt symlink",
       input: "/usr/local/Cellar/node/24.0.0/bin/node",
-      exists: ["/usr/local/opt/node/bin/node"],
       want: "/usr/local/opt/node/bin/node",
     },
     {
@@ -40,35 +36,25 @@ describe("stableNodePath", () => {
       // silently re-point the service at the wrong node.
       name: "rewrites a keg-only versioned formula to its own opt symlink, not <prefix>/bin",
       input: "/opt/homebrew/Cellar/node@22/22.22.3/bin/node",
-      exists: ["/opt/homebrew/opt/node@22/bin/node", "/opt/homebrew/bin/node"],
       want: "/opt/homebrew/opt/node@22/bin/node",
-    },
-    {
-      name: "keeps the cellar path when the opt symlink is missing",
-      input: "/opt/homebrew/Cellar/node/25.8.1_1/bin/node",
-      exists: [],
     },
     {
       name: "leaves nvm paths alone (no stable alias available)",
       input: "/Users/alice/.nvm/versions/node/v24.14.1/bin/node",
-      exists: true,
     },
     {
       name: "leaves an already-stable opt path alone",
       input: "/opt/homebrew/opt/node/bin/node",
-      exists: true,
     },
     {
       name: "leaves arbitrary non-brew paths alone",
       input: "/usr/bin/node",
-      exists: true,
     },
   ];
 
   for (const c of cases) {
     it(c.name, () => {
-      const existsSync = (p: string) => c.exists === true || c.exists.includes(p);
-      assert.equal(stableNodePath(c.input, { existsSync }), c.want ?? c.input);
+      assert.equal(stableNodePath(c.input), c.want ?? c.input);
     });
   }
 });

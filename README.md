@@ -148,6 +148,8 @@ Your existing config (credentials, `CLIENT_ID`) is preserved — `git pull` neve
 
 > **Pre-TypeScript installs:** if your launchd plist or systemd unit was installed before the TypeScript migration, it still points at `reporter/report.js`. A compatibility shim at that path forwards to the compiled `dist/reporter/report.js`, so the daemon keeps working. To get a clean unit pointing at `dist/` directly, re-run `npm run install-service` once after this update — the shim can then be removed in a future release.
 
+> **Homebrew `node@NN` installs:** if your service was installed against a versioned Homebrew formula (`node@22`, `node@24`, …), its unit still points at the raw `Cellar/` path, which the next `brew upgrade` deletes — the reporter then stops silently. `npm install` only rebuilds `dist/`; re-run `npm run install-service` once to repoint the unit at the stable `opt/` symlink.
+
 ### What's new
 
 If you're updating an existing install, refer to the config table above and add any new `.env` values you don't already have:
