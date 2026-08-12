@@ -29,14 +29,20 @@ function collectPersonalSkills(skillsDir: string): string[] {
 // sources — a plugin "Superpowers" and a skill directory "superpowers" are one
 // thing — so identity is the lowercased name, and the first spelling seen wins.
 // A case-sensitive Set would let both through, and near-duplicates render as
-// separate chips on a profile. Sorting keeps the machine-config hash stable.
+// separate chips on a profile.
+//
+// Sorted with the default comparator, deliberately: the order feeds the config
+// hash that decides whether machine_config is reported at all, and the reporter
+// runs both interactively and under launchd. A locale-aware comparator collates
+// differently as the ICU/LANG environment changes between those two, which would
+// flip the hash and re-report an unchanged config on alternating cycles.
 export function dedupeSkills(names: string[]): string[] {
   const bySpelling = new Map<string, string>();
   for (const name of names) {
     const key = name.trim().toLowerCase();
     if (key.length > 0 && !bySpelling.has(key)) bySpelling.set(key, name);
   }
-  return Array.from(bySpelling.values()).sort((a, b) => a.localeCompare(b));
+  return Array.from(bySpelling.values()).sort();
 }
 
 // Authoritative plugin list lives in installed_plugins.json — walking the

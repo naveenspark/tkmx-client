@@ -385,7 +385,7 @@ With `REPORT_MACHINE_CONFIG=true`, the skills on your profile come from three so
 
 Deriving servers from permission entries matters for hosts that register MCP servers at runtime rather than writing an `mcpServers` block — before this, those servers were never reported at all despite being documented as such.
 
-Set `SKILLS_EXCLUDE` to keep specific entries off your profile. It is a comma-separated list, matched case-insensitively, applied after all three sources are merged, so it drops a name regardless of where it came from:
+Set `SKILLS_EXCLUDE` to keep specific entries off your profile. It is a comma-separated list, matched case-insensitively, and it drops a name regardless of which source produced it:
 
 ```
 SKILLS_EXCLUDE=warp,clerk-setup,clerk-testing
