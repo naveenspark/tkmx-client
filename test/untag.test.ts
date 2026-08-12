@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   parseUntagArgs,
   buildUntagUrl,
+  buildListUrl,
   describeUntagResult,
   formatStoredTags,
   TAG_FIELDS,
@@ -88,6 +89,28 @@ test("encodes the username too", () => {
 // no-op. Refusing is the honest answer.
 test("refuses a badge containing a slash rather than sending an unaddressable request", () => {
   assert.throws(() => buildUntagUrl(HOST, "DROdio", "tools", "a/b"), /can't be addressed/);
+});
+
+// ---- the list URL -----------------------------------------------------------
+
+// `--list` is how a removal gets CHECKED, so a cached read is the one failure
+// that makes a working removal look broken. The nonce is the whole point of
+// this URL; without it the request is byte-identical to the one before the
+// removal and can be served from cache.
+test("the list URL carries a cache-busting nonce", () => {
+  const url = buildListUrl(HOST, "DROdio", 1234567890);
+  assert.equal(url.pathname, "/api/user/DROdio");
+  assert.equal(url.searchParams.get("_"), "1234567890");
+});
+
+test("a different nonce produces a different URL", () => {
+  const a = buildListUrl(HOST, "DROdio", 1);
+  const b = buildListUrl(HOST, "DROdio", 2);
+  assert.notEqual(a.toString(), b.toString());
+});
+
+test("the list URL encodes the username", () => {
+  assert.equal(buildListUrl(HOST, "a b", 1).pathname, "/api/user/a%20b");
 });
 
 // ---- response interpretation ------------------------------------------------
