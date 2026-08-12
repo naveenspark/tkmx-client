@@ -140,7 +140,9 @@ esac
 
 // Shared test scaffolding: tmp dir, fake-agentsview, stub server. Returns
 // everything the test needs plus a cleanup fn.
-async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "" }) {
+// responseJson is widened past its default so a test can add response fields
+// the reporter branches on, e.g. profile_frozen.
+async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "", responseJson = { ok: true } as Record<string, unknown> }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-e2e-"));
   const argvLog = path.join(tmp, "argv.log");
   const fakeScript = path.join(tmp, process.platform === "win32" ? "fake-agentsview-preload.cjs" : "fake-agentsview");
@@ -156,7 +158,7 @@ async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "
         captured = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
       }
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ ok: true }));
+      res.end(JSON.stringify(responseJson));
     });
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
@@ -696,6 +698,49 @@ test("legacy reporter/report.js compat shim forwards to the compiled reporter", 
     const captured = ctx.getCaptured();
     assert.ok(captured, "server should receive a POST when invoked through the shim");
     assert.equal(captured.username, "e2euser", "POST body should reflect the shim's forwarded run");
+  } finally {
+    ctx.cleanup();
+  }
+});
+
+test("a frozen profile does not consume the one-shot transition markers", async () => {
+  // The !profile_frozen branch decides whether BOTH delivery records get
+  // written, and nothing else reaches it: the stub answers { ok: true } for
+  // every other test, and reporting-state.test.ts exercises the gate primitive,
+  // which never sees a response.
+  //
+  // The failure is silent by construction. clear_dev_stats and session_stats
+  // fire only on the local prior→current edge, so recording that edge against a
+  // server that ignored the payload consumes the signal for good — the profile
+  // keeps serving stale stats and nothing logs an error. Moving saveState back
+  // outside the guard must fail here.
+  const ctx = await setupE2E({
+    dailyJson: '{"daily":[]}',
+    responseJson: { ok: true, profile_frozen: true },
+  });
+  try {
+    if (fs.existsSync(STATE_PATH)) fs.unlinkSync(STATE_PATH);
+
+    const result = await runReporter(ctx.baseEnv);
+    assert.equal(
+      result.status,
+      0,
+      `reporter exited non-zero.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    );
+    assert.ok(ctx.getCaptured(), "the report is still sent to a frozen profile");
+    assert.equal(
+      fs.existsSync(STATE_PATH),
+      false,
+      "reporting state was recorded against a server that declined to apply it, " +
+        "so the next run will treat the transition as already delivered",
+    );
+    // This run is the only one in the suite that reaches the frozen-profile
+    // notice, and a cycle that delivers nothing must not also be silent.
+    assert.match(
+      result.stdout,
+      /stay on its last snapshot/,
+      `a frozen profile left the operator no indication the report was not applied:\n${result.stdout}`,
+    );
   } finally {
     ctx.cleanup();
   }

@@ -14,11 +14,11 @@ import {
 import { collectOpenAIUsage } from "./openai";
 import { collectOpenclawUsage, discoverOpenclawSessionsDirs } from "./openclaw";
 import { mergeDailyUsage, type DailyUsage } from "./merge";
-import { collectClaudeSkills } from "./skills";
+import { collectClaudeSkills, applyExclusions, dedupeSkills } from "./skills";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
-import { loadState, saveState, computeTransitionMarkers } from "./reporting-state";
+import { loadState, saveState, computeTransitionMarkers, gateOnSnapshotHash } from "./reporting-state";
 import { STATS_WINDOW_DAYS, formatSinceStr } from "./window";
 import { resolveAvatarUrl } from "./avatar";
 import { errMessage } from "./errors";
@@ -192,7 +192,14 @@ interface MachineConfig {
   [key: string]: unknown;
 }
 
-function collectMachineConfig(): MachineConfig | null {
+// Returned instead of a bare config so the caller can record delivery only once
+// the POST carrying it has succeeded.
+interface PendingMachineConfig {
+  config: MachineConfig;
+  commit: () => void;
+}
+
+function collectMachineConfig(): PendingMachineConfig | null {
   if (process.env.REPORT_MACHINE_CONFIG !== "true") return null;
 
   const cfg: MachineConfig = { hostname: os.hostname(), os: os.platform() + " " + os.release(), cpu: "", memory_gb: Math.round(os.totalmem() / 1e9) };
@@ -208,19 +215,28 @@ function collectMachineConfig(): MachineConfig | null {
     cfg.cpu = label + " (" + cpus.length + " cores)";
   }
   try { cfg.codex_version = execFileSync("codex", ["--version"], { encoding: "utf-8", timeout: 5000 }).trim(); } catch {}
-  const skills = collectClaudeSkills();
+  // MCP servers are a capability the profile has no row of its own for, so they
+  // join the skills list rather than being collected and then never surfaced.
+  // Each source is filtered once, then merged, so a name is dropped no matter
+  // which source produced it.
+  const configStack = collectConfigStack();
+  const mcpServers = applyExclusions(configStack.mcp_servers || [], process.env.SKILLS_EXCLUDE);
+  if (mcpServers.length > 0) configStack.mcp_servers = mcpServers;
+  else delete configStack.mcp_servers;
+
+  const skills = dedupeSkills([
+    ...applyExclusions(collectClaudeSkills(), process.env.SKILLS_EXCLUDE),
+    ...mcpServers,
+  ]);
   if (skills.length > 0) cfg.claude_skills = skills;
-  Object.assign(cfg, collectConfigStack());
-  const cfgJson = JSON.stringify(cfg);
-  const cfgHash = crypto.createHash("sha256").update(cfgJson).digest("hex").slice(0, 16);
-  const hashFile = path.join(PROJECT_ROOT, ".machine_config_hash");
-  const lastHash = fs.existsSync(hashFile) ? fs.readFileSync(hashFile, "utf-8").trim() : "";
-  if (cfgHash !== lastHash) {
-    fs.writeFileSync(hashFile, cfgHash);
-    console.log("  Machine config changed, will report");
-    return cfg;
-  }
-  return null;
+
+  Object.assign(cfg, configStack);
+  // The gate keeps "changed" and "delivered" separate; commit() runs only once
+  // the POST carrying this snapshot has succeeded, as saveState below already does.
+  const gate = gateOnSnapshotHash(cfg, path.join(PROJECT_ROOT, ".machine_config_hash"));
+  if (!gate) return null;
+  console.log("  Machine config changed, will report");
+  return { config: cfg, commit: gate.commit };
 }
 
 interface ServerResponse {
@@ -410,7 +426,7 @@ async function main(): Promise<void> {
   if (AVATAR_URL) body.avatar_url = AVATAR_URL;
   if (agentsviewVersion) body.agentsview_version = agentsviewVersion;
   const machineConfig = collectMachineConfig();
-  if (machineConfig) body.machine_config = machineConfig;
+  if (machineConfig) body.machine_config = machineConfig.config;
 
   const priorState = loadState(STATE_PATH);
   const currentState = {
@@ -443,7 +459,22 @@ async function main(): Promise<void> {
   if ("session_stats" in markers) body.session_stats = null;
 
   const response = await postUsage(JSON.stringify(body));
-  saveState(STATE_PATH, currentState);
+  // A frozen profile answers 200 but stays on its last snapshot, so nothing we
+  // just sent was applied. Both writes below record "the server has this now",
+  // so both wait on the same condition: the config hash, and the reporting state
+  // whose transition markers are one-shot — clear_dev_stats and session_stats
+  // fire only on the local prior→current edge, so persisting that edge against a
+  // server that ignored it consumes the signal for good, leaving stale stats
+  // until some later toggle happens to re-trigger it.
+  //
+  // The server's exact freeze semantics are not visible from here. The asymmetry
+  // settles it: gating costs a redundant resend each cycle until the profile
+  // unfreezes, while not gating costs data the server never receives and nothing
+  // reports as missing.
+  if (!response?.profile_frozen) {
+    machineConfig?.commit();
+    saveState(STATE_PATH, currentState);
+  }
 
   // Human-facing profile lives on the Builder Index (aiworthusing), not the API host (SERVER_URL).
   const profileUrl = `https://aiworthusing.com/builder-index/u/${USERNAME}`;
