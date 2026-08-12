@@ -5,11 +5,13 @@ import { execFileSync } from "node:child_process";
 
 const CLAUDE_DIR = path.join(os.homedir(), ".claude");
 const SETTINGS_PATH = path.join(CLAUDE_DIR, "settings.json");
+const LOCAL_SETTINGS_PATH = path.join(CLAUDE_DIR, "settings.local.json");
 
 interface ClaudeSettings {
   mcpServers?: Record<string, unknown>;
   hooks?: Record<string, unknown>;
   effortLevel?: string;
+  permissions?: { allow?: string[] };
 }
 
 function readJsonSafe<T = ClaudeSettings>(filePath: string): T | null {
@@ -20,12 +22,36 @@ function countLines(filePath: string): number {
   try { return fs.readFileSync(filePath, "utf-8").split("\n").length; } catch { return 0; }
 }
 
-// MCP server names from settings.json (names only, never credentials)
-export function collectMcpServers(): string[] {
-  const settings = readJsonSafe(SETTINGS_PATH);
+// Permission entries look like "mcp__sparkle-control__set_agent_goal" or
+// "mcp__linear__*". Only the server segment is taken — never the tool name,
+// which can carry argument detail we have no business publishing.
+const MCP_PREFIX = "mcp__";
+
+function mcpServerFromPermission(entry: unknown): string | null {
+  if (typeof entry !== "string" || !entry.startsWith(MCP_PREFIX)) return null;
+  const server = entry.slice(MCP_PREFIX.length).split("__")[0];
+  return server.length > 0 ? server : null;
+}
+
+// MCP server names from settings (names only, never credentials).
+//
+// Reading settings.mcpServers alone missed every server injected at runtime by a
+// host application — Sparkle registers its own servers in-process and writes no
+// mcpServers block, so this returned [] and the documented mcp_servers field was
+// never populated. The permission patterns such hosts leave behind are the only
+// on-disk record of those servers, so they are a second source here.
+export function collectMcpServers(settingsPath: string = SETTINGS_PATH): string[] {
+  const settings = readJsonSafe(settingsPath);
   if (!settings) return [];
-  const servers = settings.mcpServers || {};
-  return Object.keys(servers).sort();
+
+  const names = new Set<string>(Object.keys(settings.mcpServers || {}));
+
+  for (const entry of settings.permissions?.allow || []) {
+    const server = mcpServerFromPermission(entry);
+    if (server) names.add(server);
+  }
+
+  return Array.from(names).sort();
 }
 
 // Hook event types and count from settings.json
@@ -123,7 +149,12 @@ interface ConfigStack {
 export function collectConfigStack(): ConfigStack {
   const cfg: ConfigStack = {};
 
-  const mcpServers = collectMcpServers();
+  // settings.local.json holds machine-local permission grants, which is where a
+  // host-injected server often shows up first.
+  const mcpServers = Array.from(new Set([
+    ...collectMcpServers(SETTINGS_PATH),
+    ...collectMcpServers(LOCAL_SETTINGS_PATH),
+  ])).sort();
   if (mcpServers.length > 0) cfg.mcp_servers = mcpServers;
 
   const hooks = collectHooks();

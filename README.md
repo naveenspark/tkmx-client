@@ -95,6 +95,7 @@ cp .env.example .env
 | `OPENCLAW_SESSIONS_DIRS` | No | Override OpenClaw auto-discovery with a comma-separated list of session directories. Defaults to auto-discovery of standalone + Plow variants on macOS. See [OpenClaw Usage](#openclaw-usage). |
 | `REPORT_DAYS` | No | Days of history to report (default: `28`). See [Backfill & Optimization](#backfill--optimization) |
 | `REPORT_MACHINE_CONFIG` | No | Set to `true` to share machine info (OS, CPU, memory, installed skills, MCP servers, hooks, CLAUDE.md stats, shell/editor) on your profile. No prompts, code, or keys are ever sent. |
+| `SKILLS_EXCLUDE` | No | Comma-separated skill or MCP server names to keep off your profile, e.g. `warp,clerk-setup`. Case-insensitive. See [Which skills get reported](#which-skills-get-reported). |
 | `REPORT_DEV_STATS` | No | Set to `true` to share how you code — tool-call frequencies, session stats, cache efficiency, git outcome metrics (commits/LOC/PRs), and Cursor AI attribution. No file paths, prompts, or code are ever sent. See [Dev Stats](#dev-stats). |
 | `REPORT_SESSION_STATS` | No | Defaults to `true` when `REPORT_DEV_STATS=true`. Shells out to `agentsview stats --format json` to collect cross-agent session analytics (portfolio, archetype, velocity, temporal patterns, cache economics). Set to `false` to opt out — on the next report the server will clear your stored session_stats blob. The opt-out marker is tracked per-checkout in `.reporting-state.json`, so if you flip the toggle in one sibling checkout the clear signal only fires from that checkout's reporter. |
 
@@ -371,6 +372,26 @@ Set `REPORT_DEV_STATS=true` to share how you actually code. This helps the commu
 **What's never sent:** file paths, prompt content, tool arguments, repo names, code, commit messages, API keys.
 
 The `REPORT_MACHINE_CONFIG` flag also now includes your configuration stack: MCP server names (no credentials), hook event types, CLAUDE.md size, shell/terminal/editor, and git worktree count.
+
+### Which skills get reported
+
+With `REPORT_MACHINE_CONFIG=true`, the skills on your profile come from three sources, merged and deduplicated:
+
+| Source | Read from | Reported as |
+|--------|-----------|-------------|
+| Installed plugins | `~/.claude/plugins/installed_plugins.json` | One entry per plugin (`superpowers`), not one per skill inside it |
+| Personal skills | `~/.claude/skills/*/` | The directory name, but only if it contains a `SKILL.md` |
+| MCP servers | `~/.claude/settings.json` and `settings.local.json` | The server name only — taken from an `mcpServers` block, or derived from `mcp__<server>__*` permission entries |
+
+Deriving servers from permission entries matters for hosts that register MCP servers at runtime rather than writing an `mcpServers` block — before this, those servers were never reported at all despite being documented as such.
+
+Set `SKILLS_EXCLUDE` to keep specific entries off your profile. It is a comma-separated list, matched case-insensitively, applied after all three sources are merged, so it drops a name regardless of where it came from:
+
+```
+SKILLS_EXCLUDE=warp,clerk-setup,clerk-testing
+```
+
+Two caveats worth knowing. Your profile shows the **union across all your machines**, so an entry disappears only once every machine that reports it has stopped — excluding something on one machine is not enough. And if a separate application also reports on your behalf, it publishes its own list, which this setting cannot reach.
 
 ## Cost Estimation
 

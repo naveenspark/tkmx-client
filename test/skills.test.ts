@@ -4,15 +4,35 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { collectClaudeSkills } from "../reporter/skills";
+import { collectClaudeSkills, applyExclusions } from "../reporter/skills";
+
+// Builds a personal-skills directory: each entry becomes <dir>/<name>/, and only
+// the ones listed in withSkillMd get a SKILL.md — the marker that makes a folder
+// an actual skill rather than a stray directory.
+function makeSkillsDir(root: string, names: string[], withSkillMd: string[]): string {
+  const dir = path.join(root, "skills");
+  fs.rmSync(dir, { recursive: true, force: true });
+  for (const name of names) {
+    fs.mkdirSync(path.join(dir, name), { recursive: true });
+    if (withSkillMd.includes(name)) {
+      fs.writeFileSync(path.join(dir, name, "SKILL.md"), "---\nname: " + name + "\n---\n");
+    }
+  }
+  return dir;
+}
 
 describe("collectClaudeSkills", () => {
   let tmpDir;
   let manifestPath;
+  // These cases cover the plugin manifest only. Without an explicit skills
+  // directory the default is the real ~/.claude/skills, which would make the
+  // results depend on whatever the developer running the suite has installed.
+  let noSkillsDir;
 
   before(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-skills-"));
     manifestPath = path.join(tmpDir, "installed_plugins.json");
+    noSkillsDir = path.join(tmpDir, "absent-skills-dir");
   });
 
   after(() => {
@@ -24,17 +44,17 @@ describe("collectClaudeSkills", () => {
   });
 
   it("returns [] when the manifest file is missing", () => {
-    assert.deepEqual(collectClaudeSkills(manifestPath), []);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), []);
   });
 
   it("returns [] when the manifest is malformed JSON", () => {
     fs.writeFileSync(manifestPath, "{ not valid json");
-    assert.deepEqual(collectClaudeSkills(manifestPath), []);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), []);
   });
 
   it("returns [] when the manifest has no plugins field", () => {
     fs.writeFileSync(manifestPath, JSON.stringify({}));
-    assert.deepEqual(collectClaudeSkills(manifestPath), []);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), []);
   });
 
   it("extracts plugin names and strips the @marketplace suffix", () => {
@@ -44,7 +64,7 @@ describe("collectClaudeSkills", () => {
         "swift-lsp@claude-plugins-official": {},
       },
     }));
-    assert.deepEqual(collectClaudeSkills(manifestPath), ["superpowers", "swift-lsp"]);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), ["superpowers", "swift-lsp"]);
   });
 
   it("returns results sorted alphabetically for a stable config hash", () => {
@@ -55,7 +75,7 @@ describe("collectClaudeSkills", () => {
         "mango@marketplace": {},
       },
     }));
-    assert.deepEqual(collectClaudeSkills(manifestPath), ["alpha", "mango", "zebra"]);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), ["alpha", "mango", "zebra"]);
   });
 
   it("deduplicates plugins with the same name from different marketplaces", () => {
@@ -65,6 +85,97 @@ describe("collectClaudeSkills", () => {
         "superpowers@fork": {},
       },
     }));
-    assert.deepEqual(collectClaudeSkills(manifestPath), ["superpowers"]);
+    assert.deepEqual(collectClaudeSkills(manifestPath, noSkillsDir), ["superpowers"]);
+  });
+});
+
+describe("collectClaudeSkills — personal skills directory", () => {
+  let tmpDir;
+  let manifestPath;
+
+  before(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-personal-"));
+    manifestPath = path.join(tmpDir, "installed_plugins.json");
+    fs.writeFileSync(manifestPath, JSON.stringify({ plugins: { "superpowers@official": {} } }));
+  });
+
+  after(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reports a directory only when it contains SKILL.md", () => {
+    const dir = makeSkillsDir(tmpDir, ["roborev", "babysit-pr", "not-a-skill"], ["roborev", "babysit-pr"]);
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["babysit-pr", "roborev", "superpowers"]);
+  });
+
+  it("merges personal skills with plugins, sorted and deduplicated", () => {
+    // "superpowers" exists as both a plugin and a personal skill; it must appear once.
+    const dir = makeSkillsDir(tmpDir, ["zebra", "superpowers", "alpha"], ["zebra", "superpowers", "alpha"]);
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["alpha", "superpowers", "zebra"]);
+  });
+
+  it("returns the plugin list unchanged when the skills directory is missing", () => {
+    const missing = path.join(tmpDir, "no-such-dir");
+    assert.deepEqual(collectClaudeSkills(manifestPath, missing), ["superpowers"]);
+  });
+
+  it("ignores loose files sitting alongside the skill directories", () => {
+    const dir = makeSkillsDir(tmpDir, ["roborev"], ["roborev"]);
+    fs.writeFileSync(path.join(dir, "README.md"), "not a skill");
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["roborev", "superpowers"]);
+  });
+
+  it("still returns personal skills when the plugin manifest is missing", () => {
+    const dir = makeSkillsDir(tmpDir, ["roborev"], ["roborev"]);
+    assert.deepEqual(collectClaudeSkills(path.join(tmpDir, "gone.json"), dir), ["roborev"]);
+  });
+
+  // Skills are commonly symlinked in from a shared repo rather than copied.
+  // Dirent.isDirectory() is false for a symlink, so checking it directly skips
+  // every linked skill — on a real machine that silently hid 10 of 13.
+  it("follows symlinked skill directories", () => {
+    const dir = makeSkillsDir(tmpDir, ["roborev"], ["roborev"]);
+    const target = path.join(tmpDir, "elsewhere", "clerk-orgs");
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, "SKILL.md"), "---\nname: clerk-orgs\n---\n");
+    fs.symlinkSync(target, path.join(dir, "clerk-orgs"));
+
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["clerk-orgs", "roborev", "superpowers"]);
+  });
+
+  it("ignores a broken symlink instead of throwing", () => {
+    const dir = makeSkillsDir(tmpDir, ["roborev"], ["roborev"]);
+    fs.symlinkSync(path.join(tmpDir, "does-not-exist"), path.join(dir, "dangling"));
+
+    assert.deepEqual(collectClaudeSkills(manifestPath, dir), ["roborev", "superpowers"]);
+  });
+});
+
+describe("applyExclusions", () => {
+  it("removes excluded names regardless of which source produced them", () => {
+    assert.deepEqual(applyExclusions(["roborev", "superpowers", "warp"], "warp"), ["roborev", "superpowers"]);
+  });
+
+  it("matches case-insensitively", () => {
+    assert.deepEqual(applyExclusions(["Warp", "roborev"], "warp"), ["roborev"]);
+    assert.deepEqual(applyExclusions(["warp", "roborev"], "WARP"), ["roborev"]);
+  });
+
+  it("tolerates whitespace around entries", () => {
+    assert.deepEqual(applyExclusions(["warp", "vercel", "roborev"], " warp , vercel "), ["roborev"]);
+  });
+
+  it("excludes nothing when unset or empty", () => {
+    assert.deepEqual(applyExclusions(["warp", "roborev"], undefined), ["warp", "roborev"]);
+    assert.deepEqual(applyExclusions(["warp", "roborev"], ""), ["warp", "roborev"]);
+    assert.deepEqual(applyExclusions(["warp", "roborev"], "   "), ["warp", "roborev"]);
+  });
+
+  it("ignores empty entries produced by stray commas", () => {
+    assert.deepEqual(applyExclusions(["warp", "roborev"], "warp,,"), ["roborev"]);
+  });
+
+  it("preserves the incoming order of the survivors", () => {
+    assert.deepEqual(applyExclusions(["a", "b", "c"], "b"), ["a", "c"]);
   });
 });
