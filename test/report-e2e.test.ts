@@ -721,7 +721,7 @@ test("a frozen profile does not consume the one-shot transition markers", async 
   try {
     if (fs.existsSync(STATE_PATH)) fs.unlinkSync(STATE_PATH);
 
-    const result = await runReporter({ ...ctx.baseEnv, REPORT_DEV_STATS: "true" });
+    const result = await runReporter(ctx.baseEnv);
     assert.equal(
       result.status,
       0,
@@ -733,6 +733,13 @@ test("a frozen profile does not consume the one-shot transition markers", async 
       false,
       "reporting state was recorded against a server that declined to apply it, " +
         "so the next run will treat the transition as already delivered",
+    );
+    // This run is the only one in the suite that reaches the frozen-profile
+    // notice, and a cycle that delivers nothing must not also be silent.
+    assert.match(
+      result.stdout,
+      /stay on its last snapshot/,
+      `a frozen profile left the operator no indication the report was not applied:\n${result.stdout}`,
     );
   } finally {
     ctx.cleanup();
