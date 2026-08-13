@@ -1,5 +1,4 @@
 import { readFile, readdir, stat } from "node:fs/promises";
-import type { Dirent } from "node:fs";
 import type { DailyUsage } from "./usage";
 import { mergeDailyUsage } from "./merge";
 
@@ -93,24 +92,26 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
   candidates.push(`${opts.homeDir}/${STANDALONE_REL}`);
   if (opts.platform === "darwin") {
     const appSupport = `${opts.homeDir}/Library/Application Support`;
-    let entries: Dirent[] = [];
-    try { entries = await readdir(appSupport, { withFileTypes: true }); } catch { entries = []; }
-    for (const entry of entries) {
+    let entries: string[] = [];
+    try { entries = await readdir(appSupport); } catch { entries = []; }
+    for (const name of entries) {
       // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
-      const name = entry.name;
-      if (!entry.isDirectory() || (name !== "co.plow.app" && !name.startsWith("co.plow.app."))) continue;
+      if (name !== "co.plow.app" && !name.startsWith("co.plow.app.")) continue;
       // Caught, unlike a configured EXTRA_*_CONFIGS home. These bundles are
       // auto-discovered, and this machine carries 23 of them (dev worktrees,
       // test variants) that nobody declared — so throwing would let one
       // unreadable throwaway abort the whole cycle and drop claude, codex and
-      // everything else with it. Worse than the undercount it guards. Zero
+      // everything else with it. Worse than the undercount it guards. It also
+      // absorbs a stray *file* named co.plow.app.something, which is why no
+      // directory filter is needed here: a Dirent check would be lstat-based
+      // and would silently drop a symlinked bundle, while exists() below
+      // stats (following symlinks) and drops non-directories anyway. Zero
       // roots still shows up: report.ts prints the root count unconditionally.
       const bundle = `${appSupport}/${name}`;
-      let subdirs: Dirent[] = [];
-      try { subdirs = await readdir(bundle, { withFileTypes: true }); } catch { subdirs = []; }
+      let subdirs: string[] = [];
+      try { subdirs = await readdir(bundle); } catch { subdirs = []; }
       for (const sub of subdirs) {
-        if (!sub.isDirectory()) continue;
-        candidates.push(`${bundle}/${sub.name}/${PLOW_REL_TAIL}`);
+        candidates.push(`${bundle}/${sub}/${PLOW_REL_TAIL}`);
       }
     }
   }
