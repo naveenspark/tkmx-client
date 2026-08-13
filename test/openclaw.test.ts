@@ -227,10 +227,14 @@ const DISCOVERY_HOME = path.join(FIXTURES, "discovery", "home");
 test("discoverOpenclawSessionsDirs returns standalone + every plow variant on macOS", async () => {
   const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: DISCOVERY_HOME, platform: "darwin" });
   const rel = result.map((p) => p.slice(DISCOVERY_HOME.length + 1)).sort();
+  // `agent-runtime` is what Plow writes today and `openclaw` is what it used
+  // to; the fixture carries both under one bundle because discovery has to
+  // find whichever a given install has without being told the name.
   assert.deepEqual(rel, [
     ".openclaw/agents/main/sessions",
     "Library/Application Support/co.plow.app.dev.wt1/openclaw/gateway/agents/main/sessions",
     "Library/Application Support/co.plow.app.wt1/openclaw/gateway/agents/main/sessions",
+    "Library/Application Support/co.plow.app/agent-runtime/gateway/agents/main/sessions",
     "Library/Application Support/co.plow.app/openclaw/gateway/agents/main/sessions",
   ].sort());
 });
