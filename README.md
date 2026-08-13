@@ -1,6 +1,6 @@
 # Builder Index Client
 
-Reports your Claude Code, Codex, Pi harness, and OpenCode token usage to the [Builder Index](https://aiworthusing.com/builder-index). Each user gets a shareable profile page at `aiworthusing.com/builder-index/u/YOUR_NAME`.
+Reports your local coding-agent token usage — whatever agentsview indexes, Claude Code and Codex and Pi and OpenCode among them — to the [Builder Index](https://aiworthusing.com/builder-index). Each user gets a shareable profile page at `aiworthusing.com/builder-index/u/YOUR_NAME`.
 
 ## Quick Start
 
@@ -22,7 +22,7 @@ npm run install-service           # auto-report every 2 hours
 
 ### 1. Install dependencies
 
-[agentsview](https://www.agentsview.io/token-usage/) is required — it reads your local Claude Code, Codex, Pi harness, and OpenCode usage data from an incrementally-synced SQLite index, which is dramatically faster than walking every transcript on each report.
+[agentsview](https://www.agentsview.io/token-usage/) is required — it reads your local agent usage data from an incrementally-synced SQLite index, and the reporter collects every agent that index holds, which is dramatically faster than walking every transcript on each report.
 
 **macOS / Linux:**
 
@@ -36,7 +36,7 @@ curl -fsSL https://agentsview.io/install.sh | bash
 powershell -ExecutionPolicy ByPass -c "irm https://agentsview.io/install.ps1 | iex"
 ```
 
-The installer drops the binary in `~/.local/bin/agentsview` by default. If you install somewhere else (nix, asdf, custom prefix), set `AGENTSVIEW_BIN=/path/to/agentsview` in your `.env` and tkmx-client will use that. See https://agentsview.io/quickstart/ for more. Codex, Pi harness, and OpenCode usage are auto-detected from AgentsView's supported default locations — no extra setup beyond agentsview.
+The installer drops the binary in `~/.local/bin/agentsview` by default. If you install somewhere else (nix, asdf, custom prefix), set `AGENTSVIEW_BIN=/path/to/agentsview` in your `.env` and tkmx-client will use that. See https://agentsview.io/quickstart/ for more. Usage from every agent AgentsView indexes is auto-detected from its supported default locations — no extra setup beyond agentsview.
 
 > **Previously using ccusage?** v1.x of this client used `ccusage`. If you prefer the old flow and don't want to install agentsview, pin to the v1.2.0 tag:
 >
@@ -107,10 +107,10 @@ npm run report
 
 ```
 [2026-04-08T12:30:40.544Z] Collecting 28d usage since 20260311 for your-name (team: your-team)
-  Claude (local): 23 days
-  Codex (local): 5 days
-  Pi (local): 3 days
-  OpenCode (local): 8 days
+  claude (local): 23 days
+  codex (local): 5 days
+  opencode (local): 8 days
+  pi (local): 3 days
 [2026-04-08T12:30:44.237Z] Server responded 200: {"ok":true,"rows":72}
 ```
 
@@ -422,11 +422,13 @@ You don't need to worry about pricing — the server handles it.
 
 ## How It Works
 
-[`agentsview`](https://www.agentsview.io/token-usage/) is the required local usage collector. It maintains its own sqlite database synced from supported local agent data directories, and the reporter queries it via `agentsview usage daily --json --breakdown --agent <claude|codex|pi|opencode>`. On large histories this is dramatically faster than walking every JSONL transcript — the sync is incremental and queries hit an indexed database.
+[`agentsview`](https://www.agentsview.io/token-usage/) is the required local usage collector. It maintains its own sqlite database synced from supported local agent data directories. The reporter runs `agentsview sync`, reads the agents that index actually holds (`SELECT DISTINCT agent FROM sessions`), and then queries each one via `agentsview usage daily --json --breakdown --agent <agent> --no-sync`. Sync comes first because discovery reads the index: an agent whose first session landed since the last sync has to be written before we look.
+
+Deriving the list from the index rather than naming agents means whatever agentsview learns to parse — it already handles copilot, gemini, cursor, iflow and amp beyond claude/codex/pi/opencode — is collected the first time it writes a session, with no client release.
 
 When `EXTRA_CLAUDE_CONFIGS`, `EXTRA_CODEX_CONFIGS`, `EXTRA_PI_CONFIGS`, or `EXTRA_OPENCODE_CONFIGS` is set, the reporter runs one agentsview invocation per extra home, each with its own `AGENT_VIEWER_DATA_DIR` (under `~/.agentsview-tkmx/<hash>/`) and the matching source dir env — `CLAUDE_PROJECTS_DIR` (`<home>/projects`) for Claude, `CODEX_SESSIONS_DIR` (`<home>/sessions`) for Codex, `PIEBALD_DIR` (`<home>`) for Pi, and `OPENCODE_DIR` (`<home>`) for OpenCode. This keeps each home in its own isolated sqlite — incremental sync works per-home and the local machine's `~/.agentsview/sessions.db` stays clean.
 
-The reporter merges daily token-usage rows from all enabled sources (Claude, Codex, Pi, OpenCode, OpenAI platform, OpenClaw) client-side into `body.data` and POSTs them to the Tokenmaxxing server. Cursor stats and session stats ship in separate body fields (`cursor_stats`, `session_stats`) — they are wholesale-replaced rolling-window blobs, not per-day token rows. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
+The reporter merges daily token-usage rows from every discovered agent, plus the OpenAI platform and OpenClaw collectors, client-side into `body.data` and POSTs them to the Tokenmaxxing server. Cursor stats and session stats ship in separate body fields (`cursor_stats`, `session_stats`) — they are wholesale-replaced rolling-window blobs, not per-day token rows. Each report replaces previous data for the same machine and date range, so re-syncs are safe and idempotent.
 
 ## Logs
 
