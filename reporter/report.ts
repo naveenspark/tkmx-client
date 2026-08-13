@@ -397,9 +397,11 @@ async function main(): Promise<void> {
     sinceDateStr: sinceStr,
     sessionsDirs: openclawDirs,
   });
-  if (openclawDirs.length > 0) {
-    console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
-  }
+  // Printed unconditionally: this line was suppressed at zero roots, which is
+  // the only time its absence is interesting. `0 root(s)` on a machine you know
+  // runs Plow is the whole signal — Plow's sessions path moved once already and
+  // read as "no Plow here" for weeks, because nothing said otherwise.
+  console.log(`  OpenClaw: ${openclawDaily.length} days from ${openclawDirs.length} root(s)`);
 
   const mergedDaily = mergeDailyUsage(...agentsviewDaily, openaiDaily, openclawDaily);
 

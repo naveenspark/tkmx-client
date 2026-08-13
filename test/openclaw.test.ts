@@ -239,42 +239,6 @@ test("discoverOpenclawSessionsDirs returns standalone + every plow variant on ma
   ].sort());
 });
 
-async function captureStderr(fn: () => Promise<unknown>): Promise<string[]> {
-  const lines: string[] = [];
-  const orig = console.error;
-  console.error = (msg: string) => { lines.push(String(msg)); };
-  try { await fn(); } finally { console.error = orig; }
-  return lines;
-}
-
-test("discoverOpenclawSessionsDirs warns per dark bundle even when a sibling still resolves", async () => {
-  // The failure this guards is not "wrong path" — it's that a wrong path was
-  // indistinguishable from no Plow at all, which is how the last rename went
-  // unnoticed. The fixture is the real shape of these machines: several
-  // bundles, one moved (`co.plow.app/some-future-layout`) and a stale sibling
-  // still resolving (`co.plow.app.wt1/openclaw/…`). A whole-run "did anything
-  // resolve?" check would go quiet here on the sibling's strength and lose the
-  // primary's usage exactly as before.
-  const home = path.join(FIXTURES, "discovery-moved", "home");
-  let result: string[] = ["unset"];
-  const errs = await captureStderr(async () => {
-    result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: home, platform: "darwin" });
-  });
-  assert.deepEqual(result.map((p) => p.slice(home.length + 1)), [
-    "Library/Application Support/co.plow.app.wt1/openclaw/gateway/agents/main/sessions",
-  ]);
-  assert.equal(errs.length, 1, `expected exactly one warning, got ${JSON.stringify(errs)}`);
-  assert.match(errs[0], /co\.plow\.app\/? has no .* — its usage is NOT being collected/);
-  assert.doesNotMatch(errs[0], /co\.plow\.app\.wt1/, "the resolving sibling must not be reported dark");
-});
-
-test("discoverOpenclawSessionsDirs stays quiet when there is no Plow bundle at all", async () => {
-  const errs = await captureStderr(() => discoverOpenclawSessionsDirs({
-    env: {}, homeDir: path.join(FIXTURES, "empty-root"), platform: "darwin",
-  }));
-  assert.deepEqual(errs, [], "a machine without Plow must not be warned about Plow");
-});
-
 test("discoverOpenclawSessionsDirs returns only roots that exist (skips missing)", async () => {
   const emptyHome = path.join(FIXTURES, "empty-root");
   const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: emptyHome, platform: "darwin" });

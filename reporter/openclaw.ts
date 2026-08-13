@@ -91,7 +91,6 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
   }
   const candidates: string[] = [];
   candidates.push(`${opts.homeDir}/${STANDALONE_REL}`);
-  const plowByBundle = new Map<string, string[]>();
   if (opts.platform === "darwin") {
     const appSupport = `${opts.homeDir}/Library/Application Support`;
     let entries: string[] = [];
@@ -102,32 +101,16 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
       const bundle = `${appSupport}/${name}`;
       let subdirs: Dirent[] = [];
       try { subdirs = await readdir(bundle, { withFileTypes: true }); } catch { subdirs = []; }
-      const bundleCandidates: string[] = [];
       for (const sub of subdirs) {
         if (!sub.isDirectory()) continue;
-        const candidate = `${bundle}/${sub.name}/${PLOW_REL_TAIL}`;
-        bundleCandidates.push(candidate);
-        candidates.push(candidate);
+        candidates.push(`${bundle}/${sub.name}/${PLOW_REL_TAIL}`);
       }
-      plowByBundle.set(bundle, bundleCandidates);
     }
   }
   // Linux/Windows: standalone path only — Plow is macOS-only.
   const present: string[] = [];
   for (const c of candidates) {
     if (await exists(c)) present.push(c);
-  }
-  // A Plow bundle that resolved nothing is the exact shape of the rename this
-  // function stopped hardcoding, and without a line here it is byte-for-byte
-  // identical to "no Plow on this machine" — which is how the last one went
-  // unnoticed for weeks. Per bundle, not "any bundle resolved": these machines
-  // carry several (co.plow.app, .wt1, .dev.wt1), so one stale sibling still
-  // resolving would otherwise mask the primary going dark — the very case this
-  // exists to announce. Not fatal: a bundle can exist before the agent has run.
-  const presentSet = new Set(present);
-  for (const [bundle, bundleCandidates] of plowByBundle) {
-    if (bundleCandidates.some((c) => presentSet.has(c))) continue;
-    console.error(`[openclaw] ${bundle} has no ${PLOW_REL_TAIL} — its usage is NOT being collected; the layout may have changed again`);
   }
   return present;
 }
