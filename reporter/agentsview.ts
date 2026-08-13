@@ -271,6 +271,13 @@ export function collectAgentsviewUsage(
       encoding: "utf-8",
       timeout: timeoutMs,
       env: { ...process.env, WARP_DIR: WARP_SKIP_DIR },
+      // sync's stdout is per-session progress we never read, and it scales with
+      // history: a 96k-session machine emits megabytes, past execFileSync's
+      // 1 MiB default maxBuffer, which kills the whole run with ENOBUFS before
+      // it can POST. Discard it instead of picking a bigger number that the
+      // next-largest history outgrows. stderr stays piped so the catch below
+      // still reports a real failure's message.
+      stdio: ["ignore", "ignore", "pipe"],
     });
   } catch (err) {
     const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";

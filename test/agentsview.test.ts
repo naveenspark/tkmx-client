@@ -170,6 +170,41 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
   });
 });
 
+describe("collectAgentsviewUsage large sync output", () => {
+  // Regression: sync's progress output scales with history, so on a large
+  // machine it runs past execFileSync's 1 MiB default maxBuffer and the run
+  // dies with ENOBUFS before any usage is collected. Observed on a
+  // 96k-session host after an agentsview upgrade forced a full resync.
+  it("survives a sync that writes more than the default maxBuffer", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-bigsync-"));
+    const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
+    try {
+      writeFakeIndex(tmp, ["claude"]);
+      process.env.AGENTSVIEW_DATA_DIR = tmp;
+
+      const fakeBin = path.join(tmp, "agentsview");
+      writeExec(
+        fakeBin,
+        `#!/bin/sh
+if [ "$1" = "sync" ]; then
+  awk 'BEGIN { line = sprintf("%1023s", ""); for (i = 0; i < 2048; i++) print line }'
+  exit 0
+fi
+echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
+`,
+      );
+
+      const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+
+      assert.equal(usageByAgent.claude[0].date, "2026-05-01");
+    } finally {
+      if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
+      else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("discoverAgents", () => {
   it("throws on an unreadable index rather than reporting an empty agent list", () => {
     // The failure that matters isn't the crash, it's the alternative: [] means
