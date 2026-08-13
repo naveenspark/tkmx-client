@@ -93,16 +93,21 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
   candidates.push(`${opts.homeDir}/${STANDALONE_REL}`);
   if (opts.platform === "darwin") {
     const appSupport = `${opts.homeDir}/Library/Application Support`;
-    let entries: string[] = [];
-    try { entries = await readdir(appSupport); } catch { entries = []; }
-    for (const name of entries) {
-      // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
-      if (name !== "co.plow.app" && !name.startsWith("co.plow.app.")) continue;
-      // Not caught: this is a bundle we've already identified as Plow's, so a
-      // read failure means its usage is missing, and swallowing it publishes an
-      // incomplete profile — the same silent undercount the glob above exists
-      // to end. The appSupport readdir stays caught because *its* absence
-      // legitimately means "no Plow here".
+    let entries: Dirent[] = [];
+    try { entries = await readdir(appSupport, { withFileTypes: true }); } catch { entries = []; }
+    for (const entry of entries) {
+      // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...).
+      // isDirectory is load-bearing, not tidiness: the readdir below is
+      // deliberately uncaught, so a stray *file* named co.plow.app.something
+      // would ENOTDIR and abort the cycle over something that cannot hold
+      // sessions.
+      const name = entry.name;
+      if (!entry.isDirectory() || (name !== "co.plow.app" && !name.startsWith("co.plow.app."))) continue;
+      // Not caught: this is a real directory we've identified as a Plow
+      // bundle, so a read failure means its usage is missing, and swallowing
+      // it publishes an incomplete profile — the same silent undercount the
+      // glob above exists to end. The appSupport readdir stays caught because
+      // *its* absence legitimately means "no Plow here".
       const bundle = `${appSupport}/${name}`;
       const subdirs: Dirent[] = await readdir(bundle, { withFileTypes: true });
       for (const sub of subdirs) {
