@@ -122,51 +122,63 @@ describe("parseAgentsviewOutput", () => {
   });
 });
 
+// Every collectAgentsviewUsage case needs the same scaffold: a temp dir
+// standing in for the AgentsView data dir, a fake index inside it, a fake
+// agentsview binary, and AGENTSVIEW_DATA_DIR pointed there for the duration.
+// `script` takes the dir so a fake that logs its calls can write inside it.
+function withFakeAgentsview(
+  agents: string[],
+  script: (tmp: string) => string,
+  fn: (fakeBin: string, tmp: string) => void,
+): void {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-agentsview-"));
+  const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
+  try {
+    writeFakeIndex(tmp, agents);
+    process.env.AGENTSVIEW_DATA_DIR = tmp;
+    const fakeBin = path.join(tmp, "agentsview");
+    writeExec(fakeBin, script(tmp));
+    fn(fakeBin, tmp);
+  } finally {
+    if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
+    else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 describe("collectAgentsviewUsage local agents", () => {
   it("collects whatever agents the index holds, syncing once first", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-agents-"));
-    const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
-    try {
-      // `hermes` is the point: it's not one of the four this used to name, and
-      // a real machine had it. Discovery has to reach it with no code change.
-      writeFakeIndex(tmp, ["claude", "codex", "hermes"]);
-      process.env.AGENTSVIEW_DATA_DIR = tmp;
-
-      const logPath = path.join(tmp, "calls.log");
-      const fakeBin = path.join(tmp, "agentsview");
-      writeExec(
-        fakeBin,
-        `#!/bin/sh
+    // `hermes` is the point: it's not one of the four this used to name, and
+    // a real machine had it. Discovery has to reach it with no code change.
+    withFakeAgentsview(
+      ["claude", "codex", "hermes"],
+      (tmp) => `#!/bin/sh
 agent=""
 prev=""
 for arg in "$@"; do
   if [ "$prev" = "--agent" ]; then agent="$arg"; fi
   prev="$arg"
 done
-echo "$*" >> "${logPath}"
+echo "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then exit 0; fi
 printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
 `,
-      );
+      (fakeBin, tmp) => {
+        const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
 
-      const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+        assert.deepEqual(Object.keys(usageByAgent).sort(), ["claude", "codex", "hermes"]);
+        assert.equal(usageByAgent.hermes[0].modelBreakdowns[0].source, "hermes");
+        assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
 
-      assert.deepEqual(Object.keys(usageByAgent).sort(), ["claude", "codex", "hermes"]);
-      assert.equal(usageByAgent.hermes[0].modelBreakdowns[0].source, "hermes");
-      assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
-
-      const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.equal(lines[0], "sync", "sync runs before discovery reads the index");
-      const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
-      assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
-      for (const line of lines.slice(1)) {
-        assert.ok(line.includes("--no-sync"), `usage call should skip sync: ${line}`);
-      }
-    } finally {
-      if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
-      else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+        const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
+        assert.equal(lines[0], "sync", "sync runs before discovery reads the index");
+        const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
+        assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
+        for (const line of lines.slice(1)) {
+          assert.ok(line.includes("--no-sync"), `usage call should skip sync: ${line}`);
+        }
+      },
+    );
   });
 });
 
@@ -174,34 +186,23 @@ describe("collectAgentsviewUsage large sync output", () => {
   // Regression: sync's progress output scales with history, so on a large
   // machine it runs past execFileSync's 1 MiB default maxBuffer and the run
   // dies with ENOBUFS before any usage is collected. Observed on a
-  // 96k-session host after an agentsview upgrade forced a full resync.
+  // 96k-session host after an agentsview upgrade forced a full resync, where
+  // sync wrote 4.5 MB to stdout and nothing to stderr.
   it("survives a sync that writes more than the default maxBuffer", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-bigsync-"));
-    const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
-    try {
-      writeFakeIndex(tmp, ["claude"]);
-      process.env.AGENTSVIEW_DATA_DIR = tmp;
-
-      const fakeBin = path.join(tmp, "agentsview");
-      writeExec(
-        fakeBin,
-        `#!/bin/sh
+    withFakeAgentsview(
+      ["claude"],
+      () => `#!/bin/sh
 if [ "$1" = "sync" ]; then
   awk 'BEGIN { line = sprintf("%1023s", ""); for (i = 0; i < 2048; i++) print line }'
   exit 0
 fi
 echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
 `,
-      );
-
-      const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
-
-      assert.equal(usageByAgent.claude[0].date, "2026-05-01");
-    } finally {
-      if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
-      else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+      (fakeBin) => {
+        const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+        assert.equal(usageByAgent.claude[0].date, "2026-05-01");
+      },
+    );
   });
 });
 
@@ -228,35 +229,24 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
   // Warp-skip is scoped to the sync call (the only one that runs the
   // parser registry that hangs an unattended daemon), not the usage ones.
   it("sets WARP_DIR=/var/empty on the sync call but not the per-agent usage calls", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-warp-"));
-    const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
-    try {
-      writeFakeIndex(tmp, ["claude", "codex"]);
-      process.env.AGENTSVIEW_DATA_DIR = tmp;
+    withFakeAgentsview(
+      ["claude", "codex"],
+      (tmp) =>
+        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${path.join(tmp, "calls.log")}"\necho '{"daily":[]}'\n`,
+      (fakeBin, tmp) => {
+        collectAgentsviewUsage(fakeBin, "20260501");
 
-      const logPath = path.join(tmp, "calls.log");
-      const fakeBin = path.join(tmp, "agentsview");
-      writeExec(
-        fakeBin,
-        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${logPath}"\necho '{"daily":[]}'\n`,
-      );
+        const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
+        assert.match(lines[0], /^WARP_DIR=\/var\/empty\|sync$/);
 
-      collectAgentsviewUsage(fakeBin, "20260501");
-
-      const lines = fs.readFileSync(logPath, "utf-8").trim().split("\n");
-      assert.match(lines[0], /^WARP_DIR=\/var\/empty\|sync$/);
-
-      for (const agent of ["claude", "codex"]) {
-        const line = lines.find((l) => l.includes(`--agent ${agent}`));
-        assert.ok(line, `missing ${agent} call`);
-        assert.ok(line.includes("--no-sync"), `${agent} call should pass --no-sync`);
-        assert.doesNotMatch(line, /WARP_DIR=\/var\/empty\|/);
-      }
-    } finally {
-      if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
-      else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
+        for (const agent of ["claude", "codex"]) {
+          const line = lines.find((l) => l.includes(`--agent ${agent}`));
+          assert.ok(line, `missing ${agent} call`);
+          assert.ok(line.includes("--no-sync"), `${agent} call should pass --no-sync`);
+          assert.doesNotMatch(line, /WARP_DIR=\/var\/empty\|/);
+        }
+      },
+    );
   });
 });
 
