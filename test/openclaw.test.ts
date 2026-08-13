@@ -239,6 +239,36 @@ test("discoverOpenclawSessionsDirs returns standalone + every plow variant on ma
   ].sort());
 });
 
+test("discoverOpenclawSessionsDirs warns when Plow is installed but no sessions root resolves", async () => {
+  // The failure this guards is not "wrong path" — it's that a wrong path was
+  // indistinguishable from no Plow at all, which is how the last rename went
+  // unnoticed. The empty result is correct; the warning is the whole point.
+  const movedHome = path.join(FIXTURES, "discovery-moved", "home");
+  const errs: string[] = [];
+  const origError = console.error;
+  console.error = (msg: string) => { errs.push(String(msg)); };
+  try {
+    const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: movedHome, platform: "darwin" });
+    assert.deepEqual(result, []);
+  } finally {
+    console.error = origError;
+  }
+  assert.equal(errs.length, 1, `expected exactly one warning, got ${JSON.stringify(errs)}`);
+  assert.match(errs[0], /found 1 Plow bundle\(s\) but no .* — Plow usage is NOT being collected/);
+});
+
+test("discoverOpenclawSessionsDirs stays quiet when there is no Plow bundle at all", async () => {
+  const errs: string[] = [];
+  const origError = console.error;
+  console.error = (msg: string) => { errs.push(String(msg)); };
+  try {
+    await discoverOpenclawSessionsDirs({ env: {}, homeDir: path.join(FIXTURES, "empty-root"), platform: "darwin" });
+  } finally {
+    console.error = origError;
+  }
+  assert.deepEqual(errs, [], "a machine without Plow must not be warned about Plow");
+});
+
 test("discoverOpenclawSessionsDirs returns only roots that exist (skips missing)", async () => {
   const emptyHome = path.join(FIXTURES, "empty-root");
   const result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: emptyHome, platform: "darwin" });

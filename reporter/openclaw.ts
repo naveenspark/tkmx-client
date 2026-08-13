@@ -1,4 +1,5 @@
 import { readFile, readdir, stat } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import type { DailyUsage } from "./usage";
 import { mergeDailyUsage } from "./merge";
 
@@ -90,6 +91,8 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
   }
   const candidates: string[] = [];
   candidates.push(`${opts.homeDir}/${STANDALONE_REL}`);
+  const plowCandidates = new Set<string>();
+  let plowBundles = 0;
   if (opts.platform === "darwin") {
     const appSupport = `${opts.homeDir}/Library/Application Support`;
     let entries: string[] = [];
@@ -98,10 +101,14 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
       // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
       if (name !== "co.plow.app" && !name.startsWith("co.plow.app.")) continue;
       const bundle = `${appSupport}/${name}`;
-      let subdirs: string[] = [];
-      try { subdirs = await readdir(bundle); } catch { subdirs = []; }
+      plowBundles++;
+      let subdirs: Dirent[] = [];
+      try { subdirs = await readdir(bundle, { withFileTypes: true }); } catch { subdirs = []; }
       for (const sub of subdirs) {
-        candidates.push(`${bundle}/${sub}/${PLOW_REL_TAIL}`);
+        if (!sub.isDirectory()) continue;
+        const candidate = `${bundle}/${sub.name}/${PLOW_REL_TAIL}`;
+        plowCandidates.add(candidate);
+        candidates.push(candidate);
       }
     }
   }
@@ -109,6 +116,14 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
   const present: string[] = [];
   for (const c of candidates) {
     if (await exists(c)) present.push(c);
+  }
+  // Plow is installed but nothing resolved under it. That's the exact shape of
+  // the rename this function stopped hardcoding, and without a line here it is
+  // byte-for-byte identical to "no Plow on this machine" — which is how the
+  // last one went unnoticed for weeks. Not fatal: a bundle can legitimately
+  // exist before the agent has ever run.
+  if (plowBundles > 0 && !present.some((p) => plowCandidates.has(p))) {
+    console.error(`[openclaw] found ${plowBundles} Plow bundle(s) but no ${PLOW_REL_TAIL} under any — Plow usage is NOT being collected; its layout may have changed again`);
   }
   return present;
 }
