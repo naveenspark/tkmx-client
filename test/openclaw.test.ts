@@ -247,19 +247,25 @@ async function captureStderr(fn: () => Promise<unknown>): Promise<string[]> {
   return lines;
 }
 
-test("discoverOpenclawSessionsDirs warns when Plow is installed but no sessions root resolves", async () => {
+test("discoverOpenclawSessionsDirs warns per dark bundle even when a sibling still resolves", async () => {
   // The failure this guards is not "wrong path" — it's that a wrong path was
   // indistinguishable from no Plow at all, which is how the last rename went
-  // unnoticed. The empty result is correct; the warning is the whole point.
+  // unnoticed. The fixture is the real shape of these machines: several
+  // bundles, one moved (`co.plow.app/some-future-layout`) and a stale sibling
+  // still resolving (`co.plow.app.wt1/openclaw/…`). A whole-run "did anything
+  // resolve?" check would go quiet here on the sibling's strength and lose the
+  // primary's usage exactly as before.
+  const home = path.join(FIXTURES, "discovery-moved", "home");
   let result: string[] = ["unset"];
   const errs = await captureStderr(async () => {
-    result = await discoverOpenclawSessionsDirs({
-      env: {}, homeDir: path.join(FIXTURES, "discovery-moved", "home"), platform: "darwin",
-    });
+    result = await discoverOpenclawSessionsDirs({ env: {}, homeDir: home, platform: "darwin" });
   });
-  assert.deepEqual(result, []);
+  assert.deepEqual(result.map((p) => p.slice(home.length + 1)), [
+    "Library/Application Support/co.plow.app.wt1/openclaw/gateway/agents/main/sessions",
+  ]);
   assert.equal(errs.length, 1, `expected exactly one warning, got ${JSON.stringify(errs)}`);
-  assert.match(errs[0], /found 1 Plow bundle\(s\) but no .* — Plow usage is NOT being collected/);
+  assert.match(errs[0], /co\.plow\.app\/? has no .* — its usage is NOT being collected/);
+  assert.doesNotMatch(errs[0], /co\.plow\.app\.wt1/, "the resolving sibling must not be reported dark");
 });
 
 test("discoverOpenclawSessionsDirs stays quiet when there is no Plow bundle at all", async () => {
