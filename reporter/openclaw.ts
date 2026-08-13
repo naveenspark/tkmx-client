@@ -98,9 +98,13 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
     for (const name of entries) {
       // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
       if (name !== "co.plow.app" && !name.startsWith("co.plow.app.")) continue;
+      // Not caught: this is a bundle we've already identified as Plow's, so a
+      // read failure means its usage is missing, and swallowing it publishes an
+      // incomplete profile — the same silent undercount the glob above exists
+      // to end. The appSupport readdir stays caught because *its* absence
+      // legitimately means "no Plow here".
       const bundle = `${appSupport}/${name}`;
-      let subdirs: Dirent[] = [];
-      try { subdirs = await readdir(bundle, { withFileTypes: true }); } catch { subdirs = []; }
+      const subdirs: Dirent[] = await readdir(bundle, { withFileTypes: true });
       for (const sub of subdirs) {
         if (!sub.isDirectory()) continue;
         candidates.push(`${bundle}/${sub.name}/${PLOW_REL_TAIL}`);
