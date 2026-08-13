@@ -96,20 +96,18 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
     let entries: Dirent[] = [];
     try { entries = await readdir(appSupport, { withFileTypes: true }); } catch { entries = []; }
     for (const entry of entries) {
-      // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...).
-      // isDirectory is load-bearing, not tidiness: the readdir below is
-      // deliberately uncaught, so a stray *file* named co.plow.app.something
-      // would ENOTDIR and abort the cycle over something that cannot hold
-      // sessions.
+      // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
       const name = entry.name;
       if (!entry.isDirectory() || (name !== "co.plow.app" && !name.startsWith("co.plow.app."))) continue;
-      // Not caught: this is a real directory we've identified as a Plow
-      // bundle, so a read failure means its usage is missing, and swallowing
-      // it publishes an incomplete profile — the same silent undercount the
-      // glob above exists to end. The appSupport readdir stays caught because
-      // *its* absence legitimately means "no Plow here".
+      // Caught, unlike a configured EXTRA_*_CONFIGS home. These bundles are
+      // auto-discovered, and this machine carries 23 of them (dev worktrees,
+      // test variants) that nobody declared — so throwing would let one
+      // unreadable throwaway abort the whole cycle and drop claude, codex and
+      // everything else with it. Worse than the undercount it guards. Zero
+      // roots still shows up: report.ts prints the root count unconditionally.
       const bundle = `${appSupport}/${name}`;
-      const subdirs: Dirent[] = await readdir(bundle, { withFileTypes: true });
+      let subdirs: Dirent[] = [];
+      try { subdirs = await readdir(bundle, { withFileTypes: true }); } catch { subdirs = []; }
       for (const sub of subdirs) {
         if (!sub.isDirectory()) continue;
         candidates.push(`${bundle}/${sub.name}/${PLOW_REL_TAIL}`);
