@@ -65,7 +65,13 @@ export function parseUsageLine(line: string): OpenclawUsageRecord | null {
 const OPENCLAW_SOURCE = "openclaw";
 
 const STANDALONE_REL = ".openclaw/agents/main/sessions";
-const PLOW_REL_TAIL = "openclaw/gateway/agents/main/sessions";
+// The segment between the app bundle and `gateway/` is NOT named here. Plow
+// renamed it `openclaw` → `agent-runtime`, and because discovery just returns
+// the roots that exist, the rename read as "this machine has no Plow usage":
+// zero roots, no error, exit 0, POST 200, and 22.5M tokens over 9 active days
+// silently absent from the profile. Globbing that level costs one readdir and
+// survives the next rename; naming the new one just re-arms the same bug.
+const PLOW_REL_TAIL = "gateway/agents/main/sessions";
 
 async function exists(p: string): Promise<boolean> {
   try { await stat(p); return true; } catch { return false; }
@@ -90,8 +96,22 @@ export async function discoverOpenclawSessionsDirs(opts: DiscoverOpts): Promise<
     try { entries = await readdir(appSupport); } catch { entries = []; }
     for (const name of entries) {
       // Match co.plow.app and any variant (co.plow.app.wt1, co.plow.app.dev, co.plow.app.dev.wt1, ...)
-      if (name === "co.plow.app" || name.startsWith("co.plow.app.")) {
-        candidates.push(`${appSupport}/${name}/${PLOW_REL_TAIL}`);
+      if (name !== "co.plow.app" && !name.startsWith("co.plow.app.")) continue;
+      // Caught, unlike a configured EXTRA_*_CONFIGS home. These bundles are
+      // auto-discovered, and this machine carries 23 of them (dev worktrees,
+      // test variants) that nobody declared — so throwing would let one
+      // unreadable throwaway abort the whole cycle and drop claude, codex and
+      // everything else with it. Worse than the undercount it guards. It also
+      // absorbs a stray *file* named co.plow.app.something, which is why no
+      // directory filter is needed here: a Dirent check would be lstat-based
+      // and would silently drop a symlinked bundle, while exists() below
+      // stats (following symlinks) and drops non-directories anyway. Zero
+      // roots still shows up: report.ts prints the root count unconditionally.
+      const bundle = `${appSupport}/${name}`;
+      let subdirs: string[] = [];
+      try { subdirs = await readdir(bundle); } catch { subdirs = []; }
+      for (const sub of subdirs) {
+        candidates.push(`${bundle}/${sub}/${PLOW_REL_TAIL}`);
       }
     }
   }

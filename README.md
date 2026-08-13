@@ -262,7 +262,7 @@ If you run [OpenClaw](https://openclaw.ai) sessions locally — standalone or wr
 **Discovery paths (macOS):**
 
 - Standalone install: `~/.openclaw/agents/main/sessions/`
-- Plow (any variant): `~/Library/Application Support/co.plow.app*/openclaw/gateway/agents/main/sessions/` — picks up `co.plow.app`, `co.plow.app.dev`, `co.plow.app.wt1`, dev/worktree variants, etc.
+- Plow (any variant): `~/Library/Application Support/co.plow.app*/*/gateway/agents/main/sessions/` — picks up `co.plow.app`, `co.plow.app.dev`, `co.plow.app.wt1`, dev/worktree variants, etc. The segment between the bundle and `gateway/` is discovered rather than named: Plow has already renamed it once (`openclaw/` → `agent-runtime/`), and both layouts resolve.
 
 **Other platforms:** Only the standalone path is probed. Plow is macOS-only.
 
