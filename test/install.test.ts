@@ -17,47 +17,46 @@ import {
 } from "../reporter/install";
 
 describe("stableNodePath", () => {
-  it("rewrites Apple Silicon brew cellar path to stable symlink", () => {
-    const existsSync = (p) => p === "/opt/homebrew/bin/node";
-    const out = stableNodePath(
-      "/opt/homebrew/Cellar/node/25.8.1_1/bin/node",
-      { existsSync }
-    );
-    assert.equal(out, "/opt/homebrew/bin/node");
-  });
+  // A brew Cellar path is rewritten to the formula's `opt/` symlink, which
+  // survives `brew upgrade`; every other path is passed through untouched.
+  const cases: Array<{ name: string; input: string; want?: string }> = [
+    {
+      name: "rewrites an Apple Silicon cellar path to the opt symlink",
+      input: "/opt/homebrew/Cellar/node/25.8.1_1/bin/node",
+      want: "/opt/homebrew/opt/node/bin/node",
+    },
+    {
+      name: "rewrites an Intel cellar path to the opt symlink",
+      input: "/usr/local/Cellar/node/24.0.0/bin/node",
+      want: "/usr/local/opt/node/bin/node",
+    },
+    {
+      // Versioned formulae are keg-only, so `<prefix>/bin/node` is the
+      // *unversioned* formula — a different major. Preferring it would
+      // silently re-point the service at the wrong node.
+      name: "rewrites a keg-only versioned formula to its own opt symlink, not <prefix>/bin",
+      input: "/opt/homebrew/Cellar/node@22/22.22.3/bin/node",
+      want: "/opt/homebrew/opt/node@22/bin/node",
+    },
+    {
+      name: "leaves nvm paths alone (no stable alias available)",
+      input: "/Users/alice/.nvm/versions/node/v24.14.1/bin/node",
+    },
+    {
+      name: "leaves an already-stable opt path alone",
+      input: "/opt/homebrew/opt/node/bin/node",
+    },
+    {
+      name: "leaves arbitrary non-brew paths alone",
+      input: "/usr/bin/node",
+    },
+  ];
 
-  it("rewrites Intel brew cellar path to stable symlink", () => {
-    const existsSync = (p) => p === "/usr/local/bin/node";
-    const out = stableNodePath(
-      "/usr/local/Cellar/node/24.0.0/bin/node",
-      { existsSync }
-    );
-    assert.equal(out, "/usr/local/bin/node");
-  });
-
-  it("keeps cellar path if the stable symlink is missing", () => {
-    const existsSync = () => false;
-    const input = "/opt/homebrew/Cellar/node/25.8.1_1/bin/node";
-    assert.equal(stableNodePath(input, { existsSync }), input);
-  });
-
-  it("leaves nvm paths alone (no stable alias available)", () => {
-    const existsSync = () => true;
-    const input = "/Users/alice/.nvm/versions/node/v24.14.1/bin/node";
-    assert.equal(stableNodePath(input, { existsSync }), input);
-  });
-
-  it("leaves already-stable brew path alone", () => {
-    const existsSync = () => true;
-    const input = "/opt/homebrew/bin/node";
-    assert.equal(stableNodePath(input, { existsSync }), input);
-  });
-
-  it("leaves arbitrary non-brew paths alone", () => {
-    const existsSync = () => true;
-    const input = "/usr/bin/node";
-    assert.equal(stableNodePath(input, { existsSync }), input);
-  });
+  for (const c of cases) {
+    it(c.name, () => {
+      assert.equal(stableNodePath(c.input), c.want ?? c.input);
+    });
+  }
 });
 
 describe("install paths", () => {
