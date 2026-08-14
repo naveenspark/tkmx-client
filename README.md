@@ -401,6 +401,22 @@ With `REPORT_MACHINE_CONFIG=true`, the skills on your profile come from three so
 
 Deriving servers from permission entries matters for hosts that register MCP servers at runtime rather than writing an `mcpServers` block — before this, those servers were never reported at all despite being documented as such.
 
+#### Where a skill links to
+
+A skill on your profile is a name, and a name alone cannot be a link. So alongside the list, the client reports `machine_config.claude_skill_links` — a `{name: url}` map covering the subset of your skills that have a canonical public home, which the profile uses to render those chips as links.
+
+Only plugin-sourced skills resolve, because only they carry an upstream. The URL is whichever of these comes first:
+
+| Preference | Read from | Example |
+|---|---|---|
+| The author's homepage | `homepage` in the marketplace manifest | `superpowers` → `https://github.com/obra/superpowers` |
+| The source repo | `source.url`, plus `/tree/<ref>/<path>` when the plugin is one of many in the repo | `https://github.com/adobe/skills/tree/main/plugins/creative-cloud/…` |
+| The marketplace itself | a repo-relative `source` resolved against the marketplace's own repo | `gopls-lsp` → `…/claude-plugins-official/tree/HEAD/plugins/gopls-lsp` |
+
+**Personal skills and MCP servers never resolve**, and neither does anything you list in `TOOLS` — a directory name or a hand-typed tool name has no upstream to point at. Those are simply absent from the map, which is what lets the profile mark them as unlinkable rather than linking them somewhere wrong. A skill is never given a link that 404s.
+
+Only `https` URLs with a real public hostname are ever sent. A marketplace installed from a local checkout yields `file://` paths or `git@host:owner/repo` remotes, and publishing either would leak a home directory or an internal hostname onto a public profile — those are dropped, not repaired. `SKILLS_EXCLUDE` drops a name's link along with the name.
+
 Set `SKILLS_EXCLUDE` to keep specific entries off your profile. It is a comma-separated list, matched case-insensitively, and it drops a name regardless of which source produced it:
 
 ```

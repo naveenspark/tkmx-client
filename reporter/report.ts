@@ -15,6 +15,7 @@ import { collectOpenAIUsage } from "./openai";
 import { collectOpenclawUsage, discoverOpenclawSessionsDirs } from "./openclaw";
 import { mergeDailyUsage, type DailyUsage } from "./merge";
 import { collectClaudeSkills, applyExclusions, dedupeSkills } from "./skills";
+import { collectSkillLinks, linksForReportedSkills } from "./skill-links";
 import { collectConfigStack } from "./config-stack";
 import { collectCursorStats, type CursorStats } from "./cursor";
 import { collectSessionStats } from "./session-stats";
@@ -189,6 +190,10 @@ interface MachineConfig {
   memory_gb: number;
   codex_version?: string;
   claude_skills?: string[];
+  // Canonical public URL per skill name, for the subset that has one. Sent
+  // alongside claude_skills rather than folded into it, so a server that does
+  // not know about links keeps rendering the same chips it always has.
+  claude_skill_links?: Record<string, string>;
   [key: string]: unknown;
 }
 
@@ -229,6 +234,14 @@ function collectMachineConfig(): PendingMachineConfig | null {
     ...mcpServers,
   ]);
   if (skills.length > 0) cfg.claude_skills = skills;
+
+  // Where each skill actually lives, for the ones we can answer for. The
+  // profile renders skills as inert text because a bare name is all it has;
+  // this is the missing half. Only plugin-sourced names resolve — a personal
+  // skill or an MCP server has no upstream to point at, and is left out so the
+  // page can mark it unlinkable instead of linking it somewhere wrong.
+  const skillLinks = linksForReportedSkills(collectSkillLinks(), skills);
+  if (Object.keys(skillLinks).length > 0) cfg.claude_skill_links = skillLinks;
 
   Object.assign(cfg, configStack);
   // The gate keeps "changed" and "delivered" separate; commit() runs only once
