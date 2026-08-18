@@ -127,10 +127,18 @@ function scheduledCheck(input: DiagnoseInput): Check {
 function lastSuccessCheck(input: DiagnoseInput): Check {
   const parsed = input.lastSuccessAt === null ? NaN : Date.parse(input.lastSuccessAt);
   if (Number.isNaN(parsed)) {
+    // warn, not fail: "never succeeded" is indistinguishable from "installed a
+    // minute ago". launchd's RunAtLoad fires a cycle the instant the unit is
+    // installed, before any success can have been stamped — failing here would
+    // print BROKEN into the log of a reporter that is working, and would put
+    // healthy:false on the very POST that proves it works, handing the
+    // server-side gone-quiet list a false positive for every new builder.
+    // A genuinely dead reporter is still caught: by the unit checks above, and
+    // by the staleness branch below once it has ever worked.
     return {
       name: "last-success",
-      status: "fail",
-      detail: "this machine has never had a report accepted by the server",
+      status: "warn",
+      detail: "this machine has not yet had a report accepted by the server — expected on a fresh install, otherwise the first cycle has never completed",
     };
   }
 

@@ -1,3 +1,38 @@
+## Progress Update as of 2026-08-18 12:40 PT
+*(Most recent updates at top)*
+
+### Summary of changes since last update
+Addressed all three roborev findings on 80a159b. One was a real first-run bug:
+a freshly installed reporter indicted itself.
+
+### Detail of changes made:
+- `reporter/doctor.ts`: a null/unparseable `last_success_at` is now `warn`, not
+  `fail`. launchd's `RunAtLoad` fires a cycle the instant the unit is installed,
+  before any success can have been stamped — the old behaviour printed
+  "BROKEN" into the log of a reporter that was working, and put
+  `healthy: false` on the very POST that proved it worked, which would have
+  handed the server-side gone-quiet list a false positive for every new
+  builder. A genuinely dead reporter is still caught by the unit checks and by
+  the staleness branch once it has ever worked. Verified: a fresh install with
+  a good unit and no success now reports `healthy: true` with one warn.
+- `test/report-e2e.test.ts`: asserts `reporter_health` actually reaches the POST
+  body (`healthy:false`, `failing_checks` containing `service-installed`).
+  Nothing covered the new wire field, so a never-firing `if (health)` guard or
+  a renamed key would have gone green.
+- `test/reporting-state.test.ts`: converted from per-test
+  `require("../reporter/reporting-state")` to typed top-level imports plus a
+  `tmpStateFile()` helper. The `require()` results were `any`, which is exactly
+  why the restored `computeTransitionMarkers` literals could omit
+  `last_success_at` unnoticed; they are now typed `ReportingState`.
+
+### Beads activity:
+- No status changes. builder-index-client-85j stays open pending
+  builder-index-client-4k7 (server half).
+
+### Potential concerns to address:
+- Suite is 297 tests, 292 passing; the same 5 pre-existing failures
+  (builder-index-client-trk) remain and are unrelated to this work.
+
 ## Progress Update as of 2026-08-18 12:20 PT
 *(Most recent updates at top)*
 

@@ -90,15 +90,24 @@ describe("diagnose — staleness", () => {
     assert.strictEqual(checkNamed(healthyInput({ lastSuccessAt: hoursAgo(STALE_AFTER_HOURS + 1) }), "last-success").status, "fail");
   });
 
-  test("fails when the reporter has never succeeded", () => {
+  // A fresh install must not indict itself. launchd's RunAtLoad runs a cycle
+  // before any success exists, so failing here would print BROKEN into a
+  // working reporter's log and put healthy:false on the very report that
+  // proves it works — a false positive on the server's gone-quiet list for
+  // every new builder.
+  test("warns rather than fails when the reporter has never succeeded", () => {
     const c = checkNamed(healthyInput({ lastSuccessAt: null }), "last-success");
-    assert.strictEqual(c.status, "fail");
-    assert.match(c.detail, /never/i);
+    assert.strictEqual(c.status, "warn");
+    assert.match(c.detail, /not yet/i);
+  });
+
+  test("a never-succeeded reporter alone does not make the machine unhealthy", () => {
+    assert.strictEqual(diagnose(healthyInput({ lastSuccessAt: null })).healthy, true);
   });
 
   test("an unparseable timestamp is treated as never, not as fresh", () => {
     const c = checkNamed(healthyInput({ lastSuccessAt: "not-a-date" }), "last-success");
-    assert.strictEqual(c.status, "fail");
+    assert.strictEqual(c.status, "warn");
   });
 
   // A clock that jumped backwards must not read as "reported in the future,

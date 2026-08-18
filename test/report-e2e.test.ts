@@ -785,6 +785,18 @@ test("a frozen profile does not consume the one-shot transition markers", async 
     assert.ok(captured, "the report is still sent to a frozen profile");
     assert.equal(captured.clear_dev_stats, true, "the transition marker fired on this run");
 
+    // reporter_health is the wire field the server half reads to tell a quiet
+    // builder from a broken one, and nothing else in the suite asserts it
+    // reaches the POST — a never-firing `if (health)` guard or a renamed key
+    // would otherwise go green. Deterministic here because baseEnv points HOME
+    // at a temp dir, so collectInput always sees no installed unit.
+    assert.ok(captured.reporter_health, "reporter_health is absent from the POST body");
+    assert.equal(captured.reporter_health.healthy, false);
+    assert.ok(
+      captured.reporter_health.failing_checks.includes("service-installed"),
+      `expected service-installed among ${JSON.stringify(captured.reporter_health.failing_checks)}`,
+    );
+
     const persisted = JSON.parse(fs.readFileSync(STATE_PATH, "utf-8"));
     assert.equal(
       persisted.dev_stats_on,
