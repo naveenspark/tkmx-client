@@ -14,7 +14,7 @@ if (os.platform() === "darwin") {
 }
 
 function uninstallLaunchd(): void {
-  const plistPath = path.join(os.homedir(), "Library", "LaunchAgents", `${LAUNCHD_LABEL}.plist`);
+  const plistPath = launchdPlistPath(os.homedir());
 
   if (fs.existsSync(plistPath)) {
     try {
