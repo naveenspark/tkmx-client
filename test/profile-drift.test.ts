@@ -30,60 +30,73 @@
 // freshest reporter was the wrong machine. The line names somewhere to start looking;
 // ownership is declared in the fixture, never inferred here.
 //
-// CI POSTURE: skips (exit 0) only when the host cannot be REACHED — a transport
-// failure, or a 5xx/429 saying it is unwell. Everything else asserts, including a 404
-// and a 200 whose body breaks the contract; see fetchProfile for why that line is
-// where it is. A guard that reddens the build on someone else's outage gets commented
-// out, but one that exits 0 on a deleted profile guards nothing. The residual trade is
-// stated plainly: an outage hides drift for that run, so this is a ratchet against a
-// value changing SILENTLY, not an uptime monitor.
+// CI POSTURE: this runs on every pull_request from a GitHub-hosted runner, so the line
+// is drawn at what a DATACENTER IP can be told apart from. Skip (exit 0) on a transport
+// failure, on 5xx/429 (the host is unwell), and on 401/403 — a WAF challenging a runner
+// IP and a profile that went private are the SAME status from out here, and reddening
+// every unrelated PR in the repo on Cloudflare's mood is precisely the cry-wolf failure
+// this file is trying not to become. Fail hard on 404/410: the profile is GONE, which is
+// unambiguous and is the drift case the guard exists for. Fail hard on any other non-200
+// and on a 200 whose body breaks the contract; see fetchProfile.
+//
+// The residual trade is stated plainly: an outage or a block hides drift for that run, so
+// this is a ratchet against a value changing SILENTLY, not an uptime monitor.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
-// The SAME source the reporter posts as client_version (reporter/report.ts imports
-// this exact field). Read rather than restated, so a release bump cannot leave the
-// guard asserting against a version nothing sends.
-import { version as CLIENT_VERSION_IMPLEMENTED } from "../package.json";
+// The judgement calls live in helpers/ so they can be driven offline. Every one of them
+// fires only on a condition the live profile does not produce — a WAF block, a deleted
+// profile, an empty machines list, a risen minimum — so against the real API they are
+// dead branches, and that is how their bugs survived. See
+// test/profile-drift-report.test.ts, which exercises each with a fixed input.
+import {
+  statusOutcome,
+  freezeFailures,
+  whoWroteThis,
+  type Canonical,
+} from "./helpers/profile-drift";
 
-const CANONICAL = JSON.parse(
+const CANONICAL: Canonical = JSON.parse(
   fs.readFileSync(path.join(__dirname, "fixtures", "profile-canonical.json"), "utf8"),
 );
 
 const TIMEOUT_MS = 15_000;
 
-interface Machine {
-  client_id?: string;
-  hostname?: string;
-  os?: string;
-  cpu?: string;
-  memory_gb?: number;
-  client_version?: string;
-  agentsview_version?: string;
-  updated_at?: string;
-}
-
-/// Returns the profile, or null when the API could not be REACHED. Null means SKIP.
+/// Either the profile, or the reason this run is skipping — never a bare null. The
+/// reason is carried rather than reconstructed at the call site, because the two skip
+/// causes look nothing alike to an operator: "the host never answered" and "the host
+/// answered 503" are different problems and the message must not claim the first when
+/// it was the second.
 ///
-/// A reachable API that answers wrongly is NOT a skip — it throws, and the test fails.
-/// The distinction matters and the earlier revision of this file got it wrong: it
-/// collapsed a transport error, a non-200, and a 200 carrying an HTML error page into
-/// one "unreachable" branch, so a genuine contract break exited 0 while the file's own
-/// comment claimed it asserted hard. Three outcomes, deliberately:
-///   * transport error / timeout, or 5xx / 429 — SKIP. The host is having a moment;
-///     that is not this repo's regression, and a guard that reddens the build on
-///     someone else's outage is one that gets commented out.
-///   * any other non-200 (a 404 means the profile is GONE, a 401 that it went private)
-///     — FAIL. Those are exactly the drift this file exists to catch.
-///   * 200 whose body is not JSON, or carries no machines array — FAIL. The endpoint
-///     answered and the answer does not satisfy the contract.
-async function fetchProfile(): Promise<Record<string, unknown> | null> {
+/// A reachable API that answers WRONGLY is not automatically a skip. The earlier
+/// revision of this file collapsed a transport error, a non-200 and a 200 carrying an
+/// HTML error page into one "unreachable" branch, so a genuine contract break exited 0
+/// while the header claimed it asserted hard. The outcomes, deliberately:
+///   * transport error / timeout — SKIP. Never reached the host.
+///   * 5xx / 429 — SKIP. Reached it; it is unwell. Not this repo's regression.
+///   * 401 / 403 — SKIP. Indistinguishable from out here: a WAF challenging a GitHub
+///     runner's datacenter IP and a profile that went private both answer this way, and
+///     only one of them is drift. Failing would redden every unrelated PR in the repo
+///     the first time the host's edge decides it dislikes CI.
+///   * 404 / 410 — FAIL. The profile is GONE. No access-control story explains it, so
+///     there is nothing to confuse it with; this is the drift the guard exists to catch.
+///   * any other non-200 — FAIL. The endpoint answered something nobody has a story for.
+///   * 200 whose body is not JSON, or carries no machines array — FAIL. It answered, and
+///     the answer does not satisfy the contract.
+type ProfileFetch =
+  | { profile: Record<string, unknown>; skip?: undefined }
+  | { profile?: undefined; skip: string };
+
+async function fetchProfile(): Promise<ProfileFetch> {
   // Read off globalThis rather than calling `fetch` directly: the tsconfig lib is
   // ES2022, which does not declare it, and this file must compile without pulling a
   // DOM lib in for one call.
   const fetchFn = (globalThis as { fetch?: (...a: unknown[]) => Promise<unknown> }).fetch;
-  if (typeof fetchFn !== "function") return null;
+  if (typeof fetchFn !== "function") {
+    return { skip: "this runtime has no global fetch, so the profile cannot be read" };
+  }
 
   let res: any;
   try {
@@ -91,11 +104,28 @@ async function fetchProfile(): Promise<Record<string, unknown> | null> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { accept: "application/json" },
     });
-  } catch {
-    return null;  // never reached the host
+  } catch (err) {
+    return {
+      skip: `never reached ${CANONICAL.api_url} (${(err as Error)?.message || "transport error"})`,
+    };
   }
 
-  if (res.status >= 500 || res.status === 429) return null;  // reached, host unwell
+  const outcome = statusOutcome(res.status);
+  if (outcome === "skip") {
+    return {
+      skip:
+        `${CANONICAL.api_url} answered ${res.status} — either the host is unwell or its edge is ` +
+        `blocking this IP, and from out here a WAF challenge and a profile gone private wear the ` +
+        `same status. Not assertable from a CI runner.`,
+    };
+  }
+  assert.notEqual(
+    outcome,
+    "fail-gone",
+    `${CANONICAL.api_url} answered ${res.status} — the profile is GONE (deleted, or renamed away ` +
+      `from ${CANONICAL.profile}). That is not an outage and not an access block; restore the ` +
+      `profile or update the fixture.`,
+  );
   assert.equal(res.status, 200, `${CANONICAL.api_url} answered ${res.status} — the profile is not readable`);
 
   let body: unknown;
@@ -108,65 +138,17 @@ async function fetchProfile(): Promise<Record<string, unknown> | null> {
     body && typeof body === "object" && Array.isArray((body as any).machines),
     `${CANONICAL.api_url} answered 200 but the body carries no machines array`,
   );
-  return body as Record<string, unknown>;
-}
-
-/// The attribution report. This is the point of the whole file, so it is built
-/// unconditionally on failure and appended to every assertion message.
-function whoWroteThis(profile: Record<string, unknown>): string {
-  const machines = ((profile.machines as Machine[]) || [])
-    .slice()
-    // Missing updated_at sorts last rather than throwing — a machine the server has
-    // never timestamped is still worth naming.
-    .sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
-
-  const owner = CANONICAL.owner.client_id;
-  const lines = machines.map((m, i) => {
-    const marks = [
-      i === 0 ? "← most recent reporter" : "",
-      m.client_id === owner ? "← DECLARED PROSE OWNER" : "",
-    ].filter(Boolean).join(" ");
-    return [
-      `    ${m.updated_at || "(never)"}  ${m.client_id || "(no client_id)"}`,
-      `      host ${m.hostname || "?"} | ${m.cpu || "?"} | ${m.memory_gb ?? "?"}GB | ${m.os || "?"}`,
-      `      client ${m.client_version || "?"} | agentsview ${m.agentsview_version || "?"} ${marks}`,
-    ].join("\n");
-  });
-
-  const newest = machines[0];
-  const ownerPresent = machines.some((m) => m.client_id === owner);
-
-  return [
-    "",
-    "  ── WHICH MACHINE IS WRITING THIS PROFILE ────────────────────────────────",
-    `  Machines reporting under ${CANONICAL.profile}, newest report first:`,
-    ...lines,
-    "",
-    `  Declared prose owner: ${owner}`,
-    ownerPresent ? "" : "  WARNING: the declared owner is not in this list at all — it has never reported,",
-    ownerPresent ? "" : "  or its client_id changed. Prose has no legitimate writer until that is resolved.",
-    newest && newest.client_id !== owner
-      ? `  The newest report is from ${newest.client_id} (${newest.hostname || "?"}), which is NOT the\n  owner. Start there — but read the caveat below before concluding it is the culprit.`
-      : "  The newest report is from the declared owner.",
-    "",
-    "  CAVEAT: updated_at is when that client last REPORTED, not when it last wrote the",
-    "  drifted field, and the newest reporter is NOT necessarily the wrong machine — a stale",
-    "  box has held the correct value while a busy box overwrote it. The server records",
-    "  the exact answer as a profile_update event (field/old_value/new_value) but exposes",
-    "  no route to read it; until it does, this is the best attribution available.",
-    `  Human-readable profile: ${CANONICAL.human_url}`,
-    "  ─────────────────────────────────────────────────────────────────────────",
-  ].filter((l) => l !== "").join("\n");
+  return { profile: body as Record<string, unknown> };
 }
 
 test("builder index profile has not drifted from canonical", async (t) => {
-  const profile = await fetchProfile();
+  const { profile, skip } = await fetchProfile();
   if (!profile) {
-    t.skip(`could not reach ${CANONICAL.api_url} — skipping rather than reddening the build on a third-party outage`);
+    t.skip(`${skip} — skipping rather than reddening the build on something this repo did not cause`);
     return;
   }
 
-  const who = whoWroteThis(profile);
+  const who = whoWroteThis(profile, CANONICAL);
   const failures: string[] = [];
 
   // ── scalar fields, pinned exactly ────────────────────────────────────────────
@@ -225,30 +207,12 @@ test("builder index profile has not drifted from canonical", async (t) => {
   // ── the silent-freeze tripwire ───────────────────────────────────────────────
   //
   // Not prose, but the same class of bug: a state where the profile stops tracking
-  // reality and nothing says so. The server freezes any profile whose client_version
-  // is below minimum_client_version, answers the POST 200/ok:true anyway, and the
-  // profile simply stops moving. Catching the minimum RISING is the only warning
-  // available before that happens.
-  const minimum = profile.minimum_client_version;
-  const implemented = CLIENT_VERSION_IMPLEMENTED;
-  if (typeof minimum === "string" && minimum.trim() !== "") {
-    const cmp = (a: string, b: string) => {
-      const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
-      const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
-      for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-        if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) - (pb[i] || 0);
-      }
-      return 0;
-    };
-    if (cmp(minimum, implemented) > 0) {
-      failures.push(
-        `server minimum_client_version is now ${minimum}, ABOVE the ${implemented} this codebase\n` +
-        `  implements. Every profile reporting at ${implemented} is being FROZEN — the POST still\n` +
-        `  returns 200 with ok:true, so nothing else will tell you. Bump the version in package.json\n` +
-        `  (which is what the reporter posts) and in ${CANONICAL.protocol.also_pinned_in}.`,
-      );
-    }
-  }
+  // reality and nothing says so. The server freezes any profile whose client_version is
+  // below minimum_client_version, answers the POST 200/ok:true anyway, and the profile
+  // simply stops moving. Catching the minimum RISING is the only warning available
+  // before that happens. Measured against the live machines, not a version pinned here —
+  // see freezeFailures for why that distinction is the whole point.
+  failures.push(...freezeFailures(profile, CANONICAL));
 
   // A profile the server itself considers stale is frozen right now.
   if (profile.versions_outdated === true) {

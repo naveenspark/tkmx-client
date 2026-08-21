@@ -36,7 +36,7 @@
     ]
   },
   "protocol": {
-    "_why": "tkmx-server parses client_version as BARE SEMVER and FREEZES any profile below minimum_client_version. The freeze is SILENT — the POST returns 200 with ok:true and only a profile_frozen flag — so a frozen profile looks exactly like a healthy one until someone notices the numbers stopped moving. The guard compares the server's minimum against the version the reporter actually posts, which it imports from package.json rather than restating here: a second copy of a release number is a thing that goes stale, and the whole point of this file is to catch values that quietly stop matching reality.",
+    "_why": "tkmx-server parses client_version as BARE SEMVER and FREEZES any profile below minimum_client_version. The freeze is SILENT — the POST returns 200 with ok:true and only a profile_frozen flag — so a frozen profile looks exactly like a healthy one until someone notices the numbers stopped moving. The guard compares the server's minimum against each machines[].client_version in the LIVE response, so no version is pinned anywhere for it to track. That matters because the declared prose owner below is Sparkle's native reporter, whose version is pinned in the repo named in also_pinned_in and cannot be read from this one \u2014 comparing against this repo's package.json covered every machine EXCEPT the only one whose freeze actually stalls the prose. The live response already carries the real number for every reporting client, and the failure names the frozen box.",
     "also_pinned_in": "sparkle: apps/desktop/src-tauri/src/builder_index.rs BUILDER_INDEX_PROTOCOL_VERSION"
   }
 }
