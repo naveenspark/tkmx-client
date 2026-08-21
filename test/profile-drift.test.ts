@@ -11,8 +11,8 @@
 //
 // So the expensive part was never the correction. It was attribution. This test's
 // real product is its failure message: on any assertion failure it prints every
-// client_id that reports under this profile, sorted newest-write-first, so the
-// question "which machine is writing this?" is answered by reading the output
+// client_id that reports under this profile, sorted newest-report-first, so the
+// question "which machine should I go look at?" is answered by reading the output
 // instead of by a fifth investigation.
 //
 // WHAT IT DOES NOT CLAIM. `machines[].updated_at` is when that client last REPORTED,
@@ -23,22 +23,29 @@
 // precision than it has. Exposing that event feed would make this exact, and is the
 // single highest-value change to the server for this class of bug.
 //
-// AND IT IS NOT A RANKING. Do not read "most recent writer" as "the culprit". On
-// 2026-08-20 the CORRECT value sat on a box that had not reported in six days while a
-// box reporting every two hours kept overwriting it — the freshest writer was the
-// wrong one. The line names a suspect to go look at; ownership is declared in the
-// fixture, never inferred here.
+// AND IT IS NOT A RANKING. Do not read "most recent reporter" as "the culprit" — the
+// output says REPORTER throughout, never writer, because reporting is the only thing
+// updated_at measures. On 2026-08-20 the CORRECT value sat on a box that had not
+// reported in six days while a box reporting every two hours kept overwriting it: the
+// freshest reporter was the wrong machine. The line names somewhere to start looking;
+// ownership is declared in the fixture, never inferred here.
 //
-// CI POSTURE: skips (exit 0) when the API cannot be reached, asserts hard when it
-// can. The reachability of a third-party host is not this repo's regression to catch,
-// and a guard that reddens the build on someone else's outage is a guard that gets
-// commented out. The trade is stated plainly: a network failure hides drift for that
-// run, so this is a ratchet against a value SILENTLY changing, not a monitor.
+// CI POSTURE: skips (exit 0) only when the host cannot be REACHED — a transport
+// failure, or a 5xx/429 saying it is unwell. Everything else asserts, including a 404
+// and a 200 whose body breaks the contract; see fetchProfile for why that line is
+// where it is. A guard that reddens the build on someone else's outage gets commented
+// out, but one that exits 0 on a deleted profile guards nothing. The residual trade is
+// stated plainly: an outage hides drift for that run, so this is a ratchet against a
+// value changing SILENTLY, not an uptime monitor.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
+// The SAME source the reporter posts as client_version (reporter/report.ts imports
+// this exact field). Read rather than restated, so a release bump cannot leave the
+// guard asserting against a version nothing sends.
+import { version as CLIENT_VERSION_IMPLEMENTED } from "../package.json";
 
 const CANONICAL = JSON.parse(
   fs.readFileSync(path.join(__dirname, "fixtures", "profile-canonical.json"), "utf8"),
@@ -57,28 +64,51 @@ interface Machine {
   updated_at?: string;
 }
 
-/// Returns the profile, or null when the API could not be reached or did not answer
-/// with parseable JSON. Null means SKIP — never a failed assertion.
+/// Returns the profile, or null when the API could not be REACHED. Null means SKIP.
+///
+/// A reachable API that answers wrongly is NOT a skip — it throws, and the test fails.
+/// The distinction matters and the earlier revision of this file got it wrong: it
+/// collapsed a transport error, a non-200, and a 200 carrying an HTML error page into
+/// one "unreachable" branch, so a genuine contract break exited 0 while the file's own
+/// comment claimed it asserted hard. Three outcomes, deliberately:
+///   * transport error / timeout, or 5xx / 429 — SKIP. The host is having a moment;
+///     that is not this repo's regression, and a guard that reddens the build on
+///     someone else's outage is one that gets commented out.
+///   * any other non-200 (a 404 means the profile is GONE, a 401 that it went private)
+///     — FAIL. Those are exactly the drift this file exists to catch.
+///   * 200 whose body is not JSON, or carries no machines array — FAIL. The endpoint
+///     answered and the answer does not satisfy the contract.
 async function fetchProfile(): Promise<Record<string, unknown> | null> {
   // Read off globalThis rather than calling `fetch` directly: the tsconfig lib is
   // ES2022, which does not declare it, and this file must compile without pulling a
   // DOM lib in for one call.
   const fetchFn = (globalThis as { fetch?: (...a: unknown[]) => Promise<unknown> }).fetch;
   if (typeof fetchFn !== "function") return null;
+
+  let res: any;
   try {
-    const res: any = await fetchFn(CANONICAL.api_url, {
+    res = await fetchFn(CANONICAL.api_url, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { accept: "application/json" },
     });
-    if (!res || res.status !== 200) return null;
-    const body = await res.json();
-    // A 200 carrying an HTML error page, or a profile with no machines array, is an
-    // unusable answer rather than a drifted one. Treat it as unreachable.
-    if (!body || typeof body !== "object" || !Array.isArray((body as any).machines)) return null;
-    return body as Record<string, unknown>;
   } catch {
-    return null;
+    return null;  // never reached the host
   }
+
+  if (res.status >= 500 || res.status === 429) return null;  // reached, host unwell
+  assert.equal(res.status, 200, `${CANONICAL.api_url} answered ${res.status} — the profile is not readable`);
+
+  let body: unknown;
+  try {
+    body = await res.json();
+  } catch {
+    assert.fail(`${CANONICAL.api_url} answered 200 with a body that is not JSON`);
+  }
+  assert.ok(
+    body && typeof body === "object" && Array.isArray((body as any).machines),
+    `${CANONICAL.api_url} answered 200 but the body carries no machines array`,
+  );
+  return body as Record<string, unknown>;
 }
 
 /// The attribution report. This is the point of the whole file, so it is built
@@ -93,7 +123,7 @@ function whoWroteThis(profile: Record<string, unknown>): string {
   const owner = CANONICAL.owner.client_id;
   const lines = machines.map((m, i) => {
     const marks = [
-      i === 0 ? "← most recent writer" : "",
+      i === 0 ? "← most recent reporter" : "",
       m.client_id === owner ? "← DECLARED PROSE OWNER" : "",
     ].filter(Boolean).join(" ");
     return [
@@ -120,7 +150,7 @@ function whoWroteThis(profile: Record<string, unknown>): string {
       : "  The newest report is from the declared owner.",
     "",
     "  CAVEAT: updated_at is when that client last REPORTED, not when it last wrote the",
-    "  drifted field, and the newest writer is NOT necessarily the wrong one — a stale",
+    "  drifted field, and the newest reporter is NOT necessarily the wrong machine — a stale",
     "  box has held the correct value while a busy box overwrote it. The server records",
     "  the exact answer as a profile_update event (field/old_value/new_value) but exposes",
     "  no route to read it; until it does, this is the best attribution available.",
@@ -200,7 +230,7 @@ test("builder index profile has not drifted from canonical", async (t) => {
   // profile simply stops moving. Catching the minimum RISING is the only warning
   // available before that happens.
   const minimum = profile.minimum_client_version;
-  const implemented = CANONICAL.protocol.client_version_implemented as string;
+  const implemented = CLIENT_VERSION_IMPLEMENTED;
   if (typeof minimum === "string" && minimum.trim() !== "") {
     const cmp = (a: string, b: string) => {
       const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
@@ -214,8 +244,8 @@ test("builder index profile has not drifted from canonical", async (t) => {
       failures.push(
         `server minimum_client_version is now ${minimum}, ABOVE the ${implemented} this codebase\n` +
         `  implements. Every profile reporting at ${implemented} is being FROZEN — the POST still\n` +
-        `  returns 200 with ok:true, so nothing else will tell you. Bump the protocol version in\n` +
-        `  package.json AND in ${CANONICAL.protocol.also_pinned_in}, then update this fixture.`,
+        `  returns 200 with ok:true, so nothing else will tell you. Bump the version in package.json\n` +
+        `  (which is what the reporter posts) and in ${CANONICAL.protocol.also_pinned_in}.`,
       );
     }
   }
