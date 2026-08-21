@@ -185,3 +185,15 @@ test("a machine the server never timestamped is still named, sorted last", () =>
   assert.match(report, /\(never\)\s+untimestamped/);
   assert.ok(report.indexOf("founder-mac") < report.indexOf("ghost"), "an untimestamped machine sorts last");
 });
+
+test("a newest machine with no client_id renders the same fallback the list does", () => {
+  // The list already renders a missing client_id as "(no client_id)", so the attribution
+  // sentence must not print "from undefined" one line below it and contradict its own
+  // output in the case where the field is least legible.
+  const report = whoWroteThis(
+    { machines: [{ hostname: "imac", updated_at: "2026-08-20 22:00:00" }] },
+    CANONICAL,
+  );
+  assert.doesNotMatch(report, /from undefined/);
+  assert.match(report, /The newest report is from \(no client_id\) \(imac\)/);
+});

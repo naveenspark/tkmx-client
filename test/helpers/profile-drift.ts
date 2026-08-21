@@ -135,7 +135,7 @@ export function whoWroteThis(profile: Record<string, unknown>, canonical: Canoni
     machines.length === 0
       ? "  No machines are reporting under this profile at all, so nothing here wrote the live\n  values. Whatever is setting them is outside the reporting path entirely."
       : newest.client_id !== owner
-        ? `  The newest report is from ${newest.client_id} (${newest.hostname || "?"}), which is NOT the\n  owner. Start there — but read the caveat below before concluding it is the culprit.`
+        ? `  The newest report is from ${newest.client_id || "(no client_id)"} (${newest.hostname || "?"}), which is NOT the\n  owner. Start there — but read the caveat below before concluding it is the culprit.`
         : "  The newest report is from the declared owner.";
 
   // null is the omit-this-line sentinel, NOT "". The two were the same value once, so the

@@ -1,5 +1,29 @@
 # fix/builder-index-profile-drift-guard
 
+## Progress Update as of 2026-08-20 18:45 Pacific
+*(Most recent updates at top)*
+
+### Summary of changes since last update
+Third review round, both findings Low and both taken. The attribution sentence now renders
+a missing `client_id` with the same `(no client_id)` fallback the machine list above it
+uses, instead of printing `from undefined` and contradicting its own output one line later.
+The four type casts on the fixture are gone — typing `CANONICAL` as `Canonical` made them
+redundant, and a cast the declaration already covers is what hides a real shape mismatch
+later.
+
+### Detail of changes made:
+- `whoWroteThis` was the one remaining unguarded render of `client_id`; every other site
+  already had the fallback. Pinned by a test that fails without it.
+- Dropped `as Record<string, string>` on `strict` / `strict_case_insensitive`,
+  `as string[]` on `non_empty.fields`, and `as string[] | undefined` on `known_bad?.[key]`.
+  Net-negative LOC; the loops read straight off the typed fixture.
+
+### Verification
+- `npm run typecheck` — clean.
+- `npm test` — 287 tests, 252 pass, 31 fail; the same 31 pre-existing, unrelated failures
+  in `report-e2e` / `agentsview` / `session-stats` documented in the entry below.
+- Reverting the fallback turns the new test red; restored, 14/14 pass in the offline file.
+
 ## Progress Update as of 2026-08-20 18:20 Pacific
 *(Most recent updates at top)*
 

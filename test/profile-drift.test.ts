@@ -156,12 +156,12 @@ test("builder index profile has not drifted from canonical", async (t) => {
   // These are SCALAR_API_KEY_FIELDS on the server: an empty string is a string, so it
   // passes the only type guard and BLANKS the stored value. They are the fields a
   // misconfigured client can actually destroy, so nothing less than exact is enough.
-  for (const [key, want] of Object.entries(CANONICAL.strict as Record<string, string>)) {
+  for (const [key, want] of Object.entries(CANONICAL.strict)) {
     if (key.startsWith("_")) continue;
     const got = profile[key];
     if (got === want) continue;
 
-    const bad = (CANONICAL.known_bad?.[key] as string[] | undefined) || [];
+    const bad = CANONICAL.known_bad?.[key] || [];
     const recurrence = bad.includes(got as string)
       ? `\n  THIS IS A KNOWN RECURRENCE — ${JSON.stringify(got)} is a value this profile has reverted to before.\n  It is not new drift; it is the same regression again.`
       : "";
@@ -179,7 +179,7 @@ test("builder index profile has not drifted from canonical", async (t) => {
   // Same destroy-by-empty-string exposure as above, so still pinned — but compared
   // case-insensitively, because the casing carries no meaning and changes for
   // reasons that are not regressions. See the fixture's note.
-  for (const [key, want] of Object.entries(CANONICAL.strict_case_insensitive as Record<string, string>)) {
+  for (const [key, want] of Object.entries(CANONICAL.strict_case_insensitive)) {
     if (key.startsWith("_")) continue;
     const got = profile[key];
     if (typeof got === "string" && got.toLowerCase() === want.toLowerCase()) continue;
@@ -196,7 +196,7 @@ test("builder index profile has not drifted from canonical", async (t) => {
   // Pinning these exactly would fail on every legitimate edit, and a guard that cries
   // wolf gets deleted. Blanking is the failure that costs something, so that is what
   // is caught.
-  for (const key of CANONICAL.non_empty.fields as string[]) {
+  for (const key of CANONICAL.non_empty.fields) {
     const got = profile[key];
     if (typeof got === "string" && got.trim() !== "") continue;
     failures.push(
