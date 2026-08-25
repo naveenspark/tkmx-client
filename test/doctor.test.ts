@@ -7,7 +7,6 @@ import {
   nodePathFromPlist,
   nodePathFromSystemdUnit,
   formatDiagnosis,
-  SUPPORTED_PLATFORMS,
   type DiagnoseInput,
 } from "../reporter/doctor";
 import { buildLaunchdPlist, buildSystemdService } from "../reporter/install";
@@ -86,11 +85,6 @@ describe("diagnose — the unit itself", () => {
     assert.match(c.detail, /not (loaded|scheduled|active)/i);
   });
 
-  test("warns rather than fails when scheduling could not be determined", () => {
-    const c = checkNamed(healthyInput({ unitScheduled: null }), "service-scheduled");
-    assert.strictEqual(c.status, "warn");
-  });
-
   // An uninstalled reporter has no unit to inspect, so node-binary and
   // scheduled checks would be noise blaming the wrong thing.
   test("skips downstream unit checks when nothing is installed", () => {
@@ -157,6 +151,5 @@ describe("platforms doctor cannot answer for", () => {
     for (const p of ["darwin", "linux"] as NodeJS.Platform[]) {
       assert.doesNotThrow(() => assertSupportedPlatform(p));
     }
-    assert.deepStrictEqual([...SUPPORTED_PLATFORMS].sort(), ["darwin", "linux"]);
   });
 });

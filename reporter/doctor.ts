@@ -27,7 +27,7 @@ import { errMessage } from "./errors";
 // install-service installs a unit on darwin and linux and refuses everywhere
 // else, so those are the only platforms where "is the unit healthy" is a
 // question with an answer.
-export const SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["darwin", "linux"];
+const SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["darwin", "linux"];
 
 // Pure, and exported, so the refusal is reachable in a test without pretending
 // to be Windows. The old code had no such gate: it fell through to the systemd
@@ -55,8 +55,8 @@ export interface DiagnoseInput {
   /** node path baked into the installed unit; null when there is no unit. */
   unitNodePath: string | null;
   nodePathExists: boolean;
-  /** null when the platform could not be asked (probe failed / unsupported). */
-  unitScheduled: boolean | null;
+  /** Only meaningful when unitInstalled: with no unit there is nothing to schedule. */
+  unitScheduled: boolean;
 }
 
 export interface Diagnosis {
@@ -118,13 +118,6 @@ function nodeBinaryCheck(input: DiagnoseInput): Check {
 }
 
 function scheduledCheck(input: DiagnoseInput): Check {
-  if (input.unitScheduled === null) {
-    return {
-      name: "service-scheduled",
-      status: "warn",
-      detail: "could not determine whether the reporter is scheduled on this platform",
-    };
-  }
   if (input.unitScheduled) {
     return { name: "service-scheduled", status: "ok", detail: "reporter is loaded and scheduled" };
   }
@@ -161,7 +154,10 @@ export function nodePathFromSystemdUnit(text: string): string | null {
   return exec?.[1] ?? null;
 }
 
-function probeScheduled(platform: NodeJS.Platform): boolean | null {
+// Only ever asked about a platform assertSupportedPlatform let through, so
+// there is no "cannot tell" answer to represent: either the unit is loaded or
+// it is not.
+function probeScheduled(platform: NodeJS.Platform): boolean {
   try {
     if (platform === "darwin") {
       execFileSync("launchctl", ["list", LAUNCHD_LABEL], { stdio: "ignore" });
@@ -171,7 +167,7 @@ function probeScheduled(platform: NodeJS.Platform): boolean | null {
       const out = execFileSync("systemctl", ["--user", "is-active", `${SYSTEMD_UNIT_BASENAME}.timer`], { encoding: "utf-8" });
       return out.trim() === "active";
     }
-    return null;
+    return false;
   } catch {
     // Both commands exit non-zero for "not loaded"/"inactive", which is the
     // answer we want rather than an error.
@@ -199,7 +195,7 @@ export function collectInput(): DiagnoseInput {
     unitInstalled,
     unitNodePath,
     nodePathExists: unitNodePath !== null && fs.existsSync(unitNodePath),
-    unitScheduled: unitInstalled ? probeScheduled(platform) : null,
+    unitScheduled: unitInstalled && probeScheduled(platform),
   };
 }
 
