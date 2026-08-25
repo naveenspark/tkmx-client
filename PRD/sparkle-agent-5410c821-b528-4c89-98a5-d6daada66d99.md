@@ -1,3 +1,54 @@
+## Progress Update as of 2026-08-25 04:56 PDT
+*(Most recent updates at top)*
+
+### Summary of changes since last update
+Closed the three open review probes on PR #71, which had been sitting unread at
+the current head while a stale comment on the PR claimed it was ready to land.
+Took the blocking one as a guard and the two mediums as deletions. Net -218 LOC.
+
+### Detail of changes made:
+- **The client no longer assesses its own health, and no longer sends one.**
+  This was the reviewer's central point and it is correct: a reporter that has
+  stopped cannot run `report.ts`, so the one machine that most needs to be
+  noticed is precisely the one that sends nothing. The unattended gone-quiet
+  signal belongs to the side still awake — the server, reading its own last
+  accepted POST. Deleted the `reporter_health` wire field and its interface, the
+  in-cycle self-check, `last_success_at` on `ReportingState`, `recordSuccess`,
+  and the doctor staleness branch. `npm run doctor` survives as what it is good
+  at: an on-demand answer to "is this machine's plumbing intact".
+- **That deletion also dissolves a defect rather than papering it.** The old
+  code read `last_success_at` *before* the POST, so a reporter recovering after
+  a two-day outage judged itself against the pre-recovery stamp and reported
+  `healthy:false` on the very run that proved it healthy — a false positive
+  handed to the server's gone-quiet list.
+- **Windows no longer reports itself broken.** `collectInput()` selected the
+  systemd unit path for every non-darwin platform, so on Windows it hunted for a
+  unit `install-service` refuses to write, found none, and called a machine that
+  never had a reporter broken. The platform check is now a pure exported
+  `assertSupportedPlatform()` that rejects before any unit path is chosen —
+  pure so the refusal is reachable in a test without pretending to be Windows,
+  which is the same pure-core/thin-probe split the rest of the file uses.
+- **`uninstall.ts` uses the canonical systemd path helpers** instead of
+  rebuilding both paths by hand, so uninstall cannot look at a different file
+  than install wrote. Dropped its now-unused `node:path` import.
+
+### Beads activity:
+- `builder-index-client-85j` (P0, silent churn) still in progress; this branch
+  is the client half only, and after this change that half is deliberately just
+  the on-demand diagnostic. The unattended detection is server-side work.
+
+### Potential concerns to address:
+- The reviewer also asked that this PR be closed and resubmitted as two. That is
+  a judgement about the PR, not about the code, so it is answered on the PR and
+  left to a human rather than acted on unilaterally.
+- Local verification note: this machine runs Node 26, for which `better-sqlite3`
+  has no prebuilt binary and `node-gyp` cannot build one, so the sqlite-backed
+  tests cannot run under the default interpreter here. Verified under Node 22
+  instead: 282/287 pass. The 5 failures are all in `resolveAgentsview` /
+  `collectSessionStats` "binary missing" cases, which fail because a real
+  `agentsview` binary is installed on this machine; they are in files this
+  change does not touch, and CI is green on them.
+
 ## Progress Update as of 2026-08-18 12:40 PT
 *(Most recent updates at top)*
 

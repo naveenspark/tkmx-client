@@ -9,7 +9,6 @@ import {
   LAUNCHD_LABEL,
   SYSTEMD_UNIT_BASENAME,
 } from "./install";
-import { loadState } from "./reporting-state";
 import { errMessage } from "./errors";
 
 // Why this file exists: REVIEW.md already promises the report path fails fast
@@ -18,11 +17,29 @@ import { errMessage } from "./errors";
 // pointing at a node binary `brew upgrade` deleted produces no report, no
 // error, and no signal on either side. Nothing here inspects the report path;
 // it inspects whether the report path is still being RUN.
+//
+// Deliberately on-demand only, and deliberately says nothing about "when did
+// this last report". A reporter that has stopped cannot run this — or anything
+// else — so silence can only be noticed by the side that is still awake: the
+// server, from its own last accepted POST. Asking the dead machine to report
+// its own death is the one thing this file must not pretend to do.
 
-// 48h rather than a single missed 2h cycle: the unit runs every 2 hours, and a
-// laptop that was shut for a long weekend must not be indicted as broken. Two
-// days of silence from a machine claiming an installed reporter is not idleness.
-export const STALE_AFTER_HOURS = 48;
+// install-service installs a unit on darwin and linux and refuses everywhere
+// else, so those are the only platforms where "is the unit healthy" is a
+// question with an answer.
+export const SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["darwin", "linux"];
+
+// Pure, and exported, so the refusal is reachable in a test without pretending
+// to be Windows. The old code had no such gate: it fell through to the systemd
+// path for every non-darwin platform, so on Windows it looked for a unit
+// install-service refuses to write, failed to find it, and called a machine
+// that never had a reporter broken.
+export function assertSupportedPlatform(platform: NodeJS.Platform): void {
+  if (SUPPORTED_PLATFORMS.includes(platform)) return;
+  throw new Error(
+    `the reporter service is not supported on ${platform} — \`npm run install-service\` refuses to install here, so there is no unit to diagnose`,
+  );
+}
 
 export type CheckStatus = "ok" | "warn" | "fail";
 
@@ -40,9 +57,6 @@ export interface DiagnoseInput {
   nodePathExists: boolean;
   /** null when the platform could not be asked (probe failed / unsupported). */
   unitScheduled: boolean | null;
-  lastSuccessAt: string | null;
-  nowMs: number;
-  staleAfterHours: number;
 }
 
 export interface Diagnosis {
@@ -72,8 +86,6 @@ export function diagnose(input: DiagnoseInput): Diagnosis {
     checks.push(nodeBinaryCheck(input));
     checks.push(scheduledCheck(input));
   }
-
-  checks.push(lastSuccessCheck(input));
 
   return { healthy: checks.every((c) => c.status !== "fail"), checks };
 }
@@ -124,46 +136,6 @@ function scheduledCheck(input: DiagnoseInput): Check {
   };
 }
 
-function lastSuccessCheck(input: DiagnoseInput): Check {
-  const parsed = input.lastSuccessAt === null ? NaN : Date.parse(input.lastSuccessAt);
-  if (Number.isNaN(parsed)) {
-    // warn, not fail: "never succeeded" is indistinguishable from "installed a
-    // minute ago". launchd's RunAtLoad fires a cycle the instant the unit is
-    // installed, before any success can have been stamped — failing here would
-    // print BROKEN into the log of a reporter that is working, and would put
-    // healthy:false on the very POST that proves it works, handing the
-    // server-side gone-quiet list a false positive for every new builder.
-    // A genuinely dead reporter is still caught: by the unit checks above, and
-    // by the staleness branch below once it has ever worked.
-    return {
-      name: "last-success",
-      status: "warn",
-      detail: "this machine has not yet had a report accepted by the server — expected on a fresh install, otherwise the first cycle has never completed",
-    };
-  }
-
-  const ageHours = (input.nowMs - parsed) / 3600_000;
-  if (ageHours < 0) {
-    // Treated as unknown, not fresh: a clock that jumped would otherwise buy
-    // itself permanent silence from this check.
-    return {
-      name: "last-success",
-      status: "warn",
-      detail: `last accepted report is dated in the future (${input.lastSuccessAt}) — check this machine's clock`,
-    };
-  }
-
-  const rounded = Math.round(ageHours);
-  if (ageHours > input.staleAfterHours) {
-    return {
-      name: "last-success",
-      status: "fail",
-      detail: `last accepted report was ${rounded}h ago, over the ${input.staleAfterHours}h threshold — your Builder Index data is going stale`,
-    };
-  }
-  return { name: "last-success", status: "ok", detail: `last accepted report was ${rounded}h ago` };
-}
-
 export function formatDiagnosis(d: Diagnosis): string {
   const lines = d.checks.map((c) => `  [${c.status.toUpperCase().padEnd(4)}] ${c.name}: ${c.detail}`);
   const header = d.healthy
@@ -207,8 +179,9 @@ function probeScheduled(platform: NodeJS.Platform): boolean | null {
   }
 }
 
-export function collectInput(nowMs: number, statePath: string): DiagnoseInput {
+export function collectInput(): DiagnoseInput {
   const platform = os.platform();
+  assertSupportedPlatform(platform);
   const home = os.homedir();
 
   let unitInstalled = false;
@@ -227,16 +200,12 @@ export function collectInput(nowMs: number, statePath: string): DiagnoseInput {
     unitNodePath,
     nodePathExists: unitNodePath !== null && fs.existsSync(unitNodePath),
     unitScheduled: unitInstalled ? probeScheduled(platform) : null,
-    lastSuccessAt: loadState(statePath).last_success_at,
-    nowMs,
-    staleAfterHours: STALE_AFTER_HOURS,
   };
 }
 
 if (require.main === module) {
   try {
-    const statePath = require("node:path").join(__dirname, "..", "..", ".reporting-state.json");
-    const d = diagnose(collectInput(Date.now(), statePath));
+    const d = diagnose(collectInput());
     console.log(formatDiagnosis(d));
     if (!d.healthy) process.exit(1);
   } catch (err) {
