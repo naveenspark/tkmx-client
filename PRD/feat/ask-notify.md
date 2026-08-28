@@ -1,5 +1,37 @@
 # feat/ask-notify
 
+## Progress Update as of 2026-08-28 03:20 Pacific
+*(Most recent updates at top)*
+
+### Summary of changes since last update
+
+Removed a `node_modules` symlink that the first commit had tracked by accident. It was a mode
+120000 blob pointing at an absolute path inside an ephemeral agent worktree, so it resolved on
+exactly one machine and would have landed on `main` as a dangling link where the dependency tree
+belongs. No feature code changed.
+
+### Detail of changes made:
+- `git rm --cached node_modules` drops the tracked symlink; the working tree keeps an untracked
+  one, which is what it always should have been.
+- `.gitignore` already had `node_modules/`, with the trailing slash. That pattern matches a
+  DIRECTORY and does not match a symlink of the same name, which is precisely how this slipped
+  past the ignore file and into a commit. Added a bare `node_modules` line beside it so both
+  spellings are covered.
+- Verified before pushing, against a trial merge of this branch onto `origin/main` (2f37bf6):
+  `npm run typecheck` clean; suite 248 pass / 31 fail vs a pristine-`main` baseline of
+  237 pass / 31 fail. The failing-test NAME SETS are byte-identical between the two, so this
+  branch adds 11 passing tests and zero failures. The 31 are pre-existing environment breakage
+  on `main` (better-sqlite3 will not build against local Node v26; agentsview is not installed).
+- PR #74 is otherwise CLEAN and MERGEABLE with four green checks, including a real
+  `typecheck + test` CI job — not only preview-deploy builds.
+
+### Beads activity:
+- None. No bead exists for this branch; the fix is a defect in the branch's own first commit.
+
+### Potential concerns to address:
+- The merge itself is not an agent's to make: `plow-pbc/tkmx-client` is pinned merge-protected,
+  so `gh pr merge` is refused by policy and a human has to land #74.
+
 ## Progress Update as of 2026-08-22 06:15 Pacific
 *(Most recent updates at top)*
 
