@@ -232,7 +232,7 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
 // The syncing calls below carry the guard; reads always use --no-sync.
 const WARP_SKIP_DIR = "/var/empty";
-const LOCAL_DIRECT_SYNC_TIMEOUT_MS = 60 * 60 * 1000;
+const DIRECT_SYNC_TIMEOUT_MS = 60 * 60 * 1000;
 
 function queryAgent(
   bin: string,
@@ -365,7 +365,7 @@ export function collectAgentsviewUsage(
   if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
     syncAgentsview(bin);
   } else {
-    syncAgentsviewOrThrow(bin, LOCAL_DIRECT_SYNC_TIMEOUT_MS);
+    syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS);
   }
 
   const since = toIsoDate(sinceStr);
@@ -400,11 +400,18 @@ export function collectAgentsviewUsage(
 // context, and an old snapshot is not evidence that a configured home is
 // current, so configured extra homes fail immediately instead of posting a
 // silently stale total.
-export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
+export function collectAgentsviewAgentOnly(
+  bin: string,
+  sinceStr: string,
+  agent: string,
+  env: Record<string, string>,
+  timeoutMs: number = 180000,
+  syncTimeoutMs: number = DIRECT_SYNC_TIMEOUT_MS,
+): DailyUsage[] {
   const since = toIsoDate(sinceStr);
   if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
     throw new Error("configured extra homes require an out-of-launchd AgentsView refresh");
   }
-  syncAgentsviewOrThrow(bin, timeoutMs, env);
+  syncAgentsviewOrThrow(bin, syncTimeoutMs, env);
   return queryAgent(bin, since, agent, timeoutMs, env);
 }

@@ -404,6 +404,24 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
     });
   });
 
+  it("keeps the direct-sync budget separate from the read timeout", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+    try {
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, `#!/bin/sh
+if [ "$1" = "sync" ]; then sleep 0.5; exit 0; fi
+echo '{"daily":[]}'
+`);
+
+      assert.deepEqual(
+        collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, 250),
+        [],
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("throws on strict sync errors without querying usage", () => {
     const cases = [
       { name: "non-zero exit", syncBody: "echo boom >&2; exit 1", timeoutMs: 180000, errorPattern: /agentsview sync failed: boom/ },
@@ -421,7 +439,14 @@ echo '{"daily":[]}'
 `);
 
         assert.throws(
-          () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, testCase.timeoutMs),
+          () => collectAgentsviewAgentOnly(
+            bin,
+            "20260829",
+            "codex",
+            {},
+            180000,
+            testCase.timeoutMs,
+          ),
           testCase.errorPattern,
           testCase.name,
         );
