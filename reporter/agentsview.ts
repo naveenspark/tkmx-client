@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errMessage } from "./errors";
+import { LAUNCHD_LABEL } from "./install";
 import Database from "better-sqlite3";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
@@ -229,24 +230,22 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // the parser, so they're untouched.
 // Living on the query (not the OS-unit env) means existing installs get the
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
-// The only syncing call is now syncAgentsview() below; the guard in
-// queryAgent stays as defense in case a caller ever syncs there.
+// The syncing calls below carry the guard; reads always use --no-sync.
 const WARP_SKIP_DIR = "/var/empty";
 
 function queryAgent(
   bin: string,
   since: string,
   agent: string,
-  noSync: boolean,
   timeoutMs: number,
   extraEnv?: Record<string, string>,
 ): DailyUsage[] {
-  const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since];
-  if (noSync) args.push("--no-sync");
-  const execOpts: Parameters<typeof execFileSync>[2] = { encoding: "utf-8", timeout: timeoutMs };
-  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
-  if (!noSync) env.WARP_DIR = WARP_SKIP_DIR;
-  execOpts.env = env;
+  const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since, "--no-sync"];
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    env: { ...process.env, ...extraEnv },
+  };
   let raw: string;
   try {
     raw = execFileSync(bin, args, execOpts) as string;
@@ -371,7 +370,7 @@ export function collectAgentsviewUsage(
   // hit the launchd sync deadlock.
   const usageByAgent: AgentsviewUsageByAgent = {};
   for (const agent of discoverAgents()) {
-    usageByAgent[agent] = queryAgent(bin, since, agent, true, timeoutMs);
+    usageByAgent[agent] = queryAgent(bin, since, agent, timeoutMs);
   }
   return usageByAgent;
 }
@@ -390,9 +389,19 @@ export function collectAgentsviewUsage(
 // made fatal to prevent. Sync is a separate direct-write operation because a
 // daemon auto-start can outlive AgentsView's fixed readiness window on a large
 // archive, especially when a service manager reaps the daemon after every run.
-// Only a successful strict sync reaches the no-sync usage read.
+// Only a successful strict sync reaches the no-sync usage read. The installed
+// launchd job is the exception: AgentsView writes deadlock in that spawn
+// context, so it reads an existing snapshot and fails immediately if no
+// snapshot has ever completed.
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
-  syncAgentsviewOrThrow(bin, timeoutMs, env);
-  return queryAgent(bin, since, agent, true, timeoutMs, env);
+  if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
+    const dataDir = env.AGENT_VIEWER_DATA_DIR;
+    if (!dataDir || !fs.existsSync(path.join(dataDir, "sessions.db"))) {
+      throw new Error("no existing AgentsView snapshot for configured extra home under launchd");
+    }
+  } else {
+    syncAgentsviewOrThrow(bin, timeoutMs, env);
+  }
+  return queryAgent(bin, since, agent, timeoutMs, env);
 }

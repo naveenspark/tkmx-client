@@ -109,8 +109,9 @@ retain its `boolean` return and existing log message exactly in behavior.
 - [ ] **Step 4: Split extra-home collection into two phases**
 
 Change `collectAgentsviewAgentOnly` to call
-`syncAgentsviewOrThrow(bin, timeoutMs, env)`, then call
-`queryAgent(bin, since, agent, true, timeoutMs, env)`.
+`syncAgentsviewOrThrow(bin, timeoutMs, env)`, then perform a `--no-sync` query.
+For the installed launchd job, skip the deadlocking write, require an existing
+isolated snapshot, and read it with the same `--no-sync` query.
 
 - [ ] **Step 5: Run the focused test and verify GREEN**
 

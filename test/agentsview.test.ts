@@ -14,6 +14,7 @@ import {
   resolveAgentsviewWith,
 } from "../reporter/agentsview";
 import { writeFakeIndex } from "./fake-index";
+import { LAUNCHD_LABEL } from "../reporter/install";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -359,45 +360,69 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
     }
   });
 
-  it("throws on strict sync failure without querying usage", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+  it("reads an existing isolated snapshot without syncing under reporter launchd", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-launchd-"));
+    const previousServiceName = process.env.XPC_SERVICE_NAME;
     try {
       const calls = path.join(tmp, "calls.log");
       const bin = path.join(tmp, "fake-agentsview");
       writeExec(bin, `#!/bin/sh
 echo "$*" >> "${calls}"
-if [ "$1" = "sync" ]; then echo boom >&2; exit 1; fi
+if [ "$1" = "sync" ]; then exit 99; fi
 echo '{"daily":[]}'
 `);
+      const dataDir = path.join(tmp, "index");
+      fs.mkdirSync(dataDir);
+      fs.writeFileSync(path.join(dataDir, "sessions.db"), "snapshot");
+      process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
 
-      assert.throws(
-        () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}),
-        /agentsview sync failed: boom/,
+      assert.deepEqual(
+        collectAgentsviewAgentOnly(bin, "20260829", "codex", {
+          AGENT_VIEWER_DATA_DIR: dataDir,
+        }),
+        [],
       );
-      assert.deepEqual(fs.readFileSync(calls, "utf-8").trim().split("\n"), ["sync"]);
+      assert.match(fs.readFileSync(calls, "utf-8"), /^usage daily .*--no-sync\n$/);
+
+      fs.rmSync(path.join(dataDir, "sessions.db"));
+      assert.throws(
+        () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {
+          AGENT_VIEWER_DATA_DIR: dataDir,
+        }),
+        /no existing AgentsView snapshot/,
+      );
     } finally {
+      if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
+      else process.env.XPC_SERVICE_NAME = previousServiceName;
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
-  it("throws on strict sync timeout without querying usage", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
-    try {
-      const calls = path.join(tmp, "calls.log");
-      const bin = path.join(tmp, "fake-agentsview");
-      writeExec(bin, `#!/bin/sh
+  it("throws on strict sync errors without querying usage", () => {
+    const cases = [
+      { name: "non-zero exit", syncBody: "echo boom >&2; exit 1", timeoutMs: 180000, errorPattern: /agentsview sync failed: boom/ },
+      { name: "timeout", syncBody: "exec sleep 30", timeoutMs: 1000, errorPattern: /agentsview sync failed: .*ETIMEDOUT/ },
+    ];
+    for (const testCase of cases) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+      try {
+        const calls = path.join(tmp, "calls.log");
+        const bin = path.join(tmp, "fake-agentsview");
+        writeExec(bin, `#!/bin/sh
 echo "$*" >> "${calls}"
-if [ "$1" = "sync" ]; then exec sleep 30; fi
+if [ "$1" = "sync" ]; then ${testCase.syncBody}; fi
 echo '{"daily":[]}'
 `);
 
-      assert.throws(
-        () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, 1000),
-        /agentsview sync failed: .*ETIMEDOUT/,
-      );
-      assert.deepEqual(fs.readFileSync(calls, "utf-8").trim().split("\n"), ["sync"]);
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
+        assert.throws(
+          () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, testCase.timeoutMs),
+          testCase.errorPattern,
+          testCase.name,
+        );
+        assert.deepEqual(fs.readFileSync(calls, "utf-8").trim().split("\n"), ["sync"]);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
     }
   });
 });

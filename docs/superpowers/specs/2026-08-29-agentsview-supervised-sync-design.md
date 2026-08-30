@@ -37,10 +37,13 @@ Extra-home collection will use two explicit phases:
    `agentsview usage daily` query with `--no-sync` against the same isolated
    data directory.
 
-The extra-home sync is strict. A non-zero exit, timeout, or spawn error aborts
-the report, preserving the existing guarantee that a configured home cannot be
-silently omitted. The default local index keeps its existing best-effort sync
-behavior because it can safely report a previously synchronized snapshot.
+The extra-home sync is strict on systemd and in interactive runs. A non-zero
+exit, timeout, or spawn error aborts the report, preserving the existing
+guarantee that a configured home cannot be silently omitted. Under the
+installed launchd job, where AgentsView writes deadlock, the reporter reads an
+existing isolated snapshot and fails immediately when no snapshot exists. The
+default local index keeps its existing best-effort sync behavior because it can
+safely report a previously synchronized snapshot.
 
 No service-manager configuration changes are required. In particular, the
 reporter will not preserve unmanaged child daemons or install one daemon per
@@ -51,8 +54,7 @@ extra account.
 `reporter/agentsview.ts` remains the sole owner of AgentsView process behavior.
 It will expose a strict sync operation used by
 `collectAgentsviewAgentOnly`. The existing `queryAgent` operation remains the
-single JSON parsing boundary and will receive `noSync=true` after the strict
-sync succeeds.
+single JSON parsing boundary and always reads with `--no-sync`.
 
 `reporter/report.ts` will keep validating extra-home paths and attaching the
 home name to any error. It will not learn command flags or daemon policy.
@@ -68,6 +70,8 @@ AgentsView binary:
 - the query receives `--no-sync` and the same isolated/source directories;
 - a strict sync failure throws and prevents the query;
 - a strict sync timeout throws and prevents the query;
+- the installed launchd job reads an existing isolated snapshot without
+  attempting a write and fails when no snapshot exists;
 - local-index synchronization remains best-effort;
 - the end-to-end reporter still refuses to POST when configured extra-home
   collection fails.
