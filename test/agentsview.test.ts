@@ -4,8 +4,17 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, discoverAgents, syncAgentsview, resolveAgentsviewWith } from "../reporter/agentsview";
+import {
+  parseAgentsviewOutput,
+  toIsoDate,
+  collectAgentsviewUsage,
+  collectAgentsviewAgentOnly,
+  discoverAgents,
+  syncAgentsview,
+  resolveAgentsviewWith,
+} from "../reporter/agentsview";
 import { writeFakeIndex } from "./fake-index";
+import { LAUNCHD_LABEL } from "../reporter/install";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -312,6 +321,85 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
         }
       },
     );
+  });
+});
+
+describe("collectAgentsviewAgentOnly strict isolated sync", () => {
+  it("direct-syncs the isolated home before reading it with --no-sync", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+    try {
+      const calls = path.join(tmp, "calls.log");
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, `#!/bin/sh
+printf 'NO_DAEMON=%s|WARP_DIR=%s|DATA=%s|SOURCE=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$WARP_DIR" "$AGENT_VIEWER_DATA_DIR" "$CODEX_SESSIONS_DIR" "$*" >> "${calls}"
+if [ "$1" = "sync" ]; then exit 0; fi
+echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-sol","inputTokens":10,"outputTokens":2}]}]}'
+`);
+      const dataDir = path.join(tmp, "index");
+      const sourceDir = path.join(tmp, "codex", "sessions");
+
+      const result = collectAgentsviewAgentOnly(bin, "20260829", "codex", {
+        AGENT_VIEWER_DATA_DIR: dataDir,
+        CODEX_SESSIONS_DIR: sourceDir,
+      });
+
+      assert.equal(result[0].modelBreakdowns[0].totalTokens, 12);
+      const lines = fs.readFileSync(calls, "utf-8").trim().split("\n");
+      assert.equal(lines.length, 2);
+      assert.equal(
+        lines[0],
+        `NO_DAEMON=1|WARP_DIR=/var/empty|DATA=${dataDir}|SOURCE=${sourceDir}|sync`,
+      );
+      assert.match(lines[1], new RegExp(
+        `^NO_DAEMON=\\|WARP_DIR=\\|DATA=${dataDir}\\|SOURCE=${sourceDir}\\|usage daily `,
+      ));
+      assert.match(lines[1], /--agent codex/);
+      assert.match(lines[1], /--no-sync$/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("fails immediately without syncing under reporter launchd", () => {
+    const previousServiceName = process.env.XPC_SERVICE_NAME;
+    try {
+      process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+      assert.throws(
+        () => collectAgentsviewAgentOnly("/must-not-run", "20260829", "codex", {}),
+        /configured extra homes require an out-of-launchd AgentsView refresh/,
+      );
+    } finally {
+      if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
+      else process.env.XPC_SERVICE_NAME = previousServiceName;
+    }
+  });
+
+  it("throws on strict sync errors without querying usage", () => {
+    const cases = [
+      { name: "non-zero exit", syncBody: "echo boom >&2; exit 1", timeoutMs: 180000, errorPattern: /agentsview sync failed: boom/ },
+      { name: "timeout", syncBody: "exec sleep 30", timeoutMs: 1000, errorPattern: /agentsview sync failed: .*ETIMEDOUT/ },
+    ];
+    for (const testCase of cases) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+      try {
+        const calls = path.join(tmp, "calls.log");
+        const bin = path.join(tmp, "fake-agentsview");
+        writeExec(bin, `#!/bin/sh
+echo "$*" >> "${calls}"
+if [ "$1" = "sync" ]; then ${testCase.syncBody}; fi
+echo '{"daily":[]}'
+`);
+
+        assert.throws(
+          () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, testCase.timeoutMs),
+          testCase.errorPattern,
+          testCase.name,
+        );
+        assert.deepEqual(fs.readFileSync(calls, "utf-8").trim().split("\n"), ["sync"]);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
   });
 });
 
