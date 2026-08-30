@@ -180,7 +180,7 @@ for arg in "$@"; do
   prev="$arg"
 done
 printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
-if [ "$1" = "sync" ]; then exit 0; fi
+if [ "$1" = "sync" ]; then sleep 0.5; exit 0; fi
 printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
 `,
       (fakeBin, tmp) => {
@@ -373,10 +373,16 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
       const dataDir = path.join(tmp, "index");
       const sourceDir = path.join(tmp, "codex", "sessions");
 
-      const result = collectAgentsviewAgentOnly(bin, "20260829", "codex", {
-        AGENT_VIEWER_DATA_DIR: dataDir,
-        CODEX_SESSIONS_DIR: sourceDir,
-      });
+      const result = collectAgentsviewAgentOnly(
+        bin,
+        "20260829",
+        "codex",
+        {
+          AGENT_VIEWER_DATA_DIR: dataDir,
+          CODEX_SESSIONS_DIR: sourceDir,
+        },
+        250,
+      );
 
       assert.equal(result[0].modelBreakdowns[0].totalTokens, 12);
       const lines = fs.readFileSync(calls, "utf-8").trim().split("\n");
@@ -402,24 +408,6 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
         /configured extra homes require an out-of-launchd AgentsView refresh/,
       );
     });
-  });
-
-  it("keeps the direct-sync budget separate from the read timeout", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
-    try {
-      const bin = path.join(tmp, "fake-agentsview");
-      writeExec(bin, `#!/bin/sh
-if [ "$1" = "sync" ]; then sleep 0.5; exit 0; fi
-echo '{"daily":[]}'
-`);
-
-      assert.deepEqual(
-        collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, 250),
-        [],
-      );
-    } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
   });
 
   it("throws on strict sync errors without querying usage", () => {
