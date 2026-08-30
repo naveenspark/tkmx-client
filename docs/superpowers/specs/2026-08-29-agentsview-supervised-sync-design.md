@@ -40,10 +40,10 @@ Extra-home collection will use two explicit phases:
 The extra-home sync is strict on systemd and in interactive runs. A non-zero
 exit, timeout, or spawn error aborts the report, preserving the existing
 guarantee that a configured home cannot be silently omitted. Under the
-installed launchd job, where AgentsView writes deadlock, the reporter reads an
-existing isolated snapshot and fails immediately when no snapshot exists. The
-default local index keeps its existing best-effort sync behavior because it can
-safely report a previously synchronized snapshot.
+installed launchd job, where AgentsView writes deadlock, configured extra homes
+fail immediately because an existing snapshot cannot prove freshness. The
+default local index keeps its existing best-effort sync behavior because its
+explicit contract permits a previously synchronized snapshot.
 
 No service-manager configuration changes are required. In particular, the
 reporter will not preserve unmanaged child daemons or install one daemon per
@@ -70,8 +70,8 @@ AgentsView binary:
 - the query receives `--no-sync` and the same isolated/source directories;
 - a strict sync failure throws and prevents the query;
 - a strict sync timeout throws and prevents the query;
-- the installed launchd job reads an existing isolated snapshot without
-  attempting a write and fails when no snapshot exists;
+- the installed launchd job fails configured extra-home collection immediately
+  without attempting a write or posting stale data;
 - local-index synchronization remains best-effort;
 - the end-to-end reporter still refuses to POST when configured extra-home
   collection fails.

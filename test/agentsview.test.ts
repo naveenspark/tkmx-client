@@ -360,7 +360,7 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
     }
   });
 
-  it("reads an existing isolated snapshot without syncing under reporter launchd", () => {
+  it("fails immediately without syncing under reporter launchd", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-launchd-"));
     const previousServiceName = process.env.XPC_SERVICE_NAME;
     try {
@@ -376,21 +376,13 @@ echo '{"daily":[]}'
       fs.writeFileSync(path.join(dataDir, "sessions.db"), "snapshot");
       process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
 
-      assert.deepEqual(
-        collectAgentsviewAgentOnly(bin, "20260829", "codex", {
-          AGENT_VIEWER_DATA_DIR: dataDir,
-        }),
-        [],
-      );
-      assert.match(fs.readFileSync(calls, "utf-8"), /^usage daily .*--no-sync\n$/);
-
-      fs.rmSync(path.join(dataDir, "sessions.db"));
       assert.throws(
         () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {
           AGENT_VIEWER_DATA_DIR: dataDir,
         }),
-        /no existing AgentsView snapshot/,
+        /configured extra homes require an out-of-launchd AgentsView refresh/,
       );
+      assert.equal(fs.existsSync(calls), false);
     } finally {
       if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
       else process.env.XPC_SERVICE_NAME = previousServiceName;

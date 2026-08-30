@@ -391,17 +391,14 @@ export function collectAgentsviewUsage(
 // archive, especially when a service manager reaps the daemon after every run.
 // Only a successful strict sync reaches the no-sync usage read. The installed
 // launchd job is the exception: AgentsView writes deadlock in that spawn
-// context, so it reads an existing snapshot and fails immediately if no
-// snapshot has ever completed.
+// context, and an old snapshot is not evidence that a configured home is
+// current, so configured extra homes fail immediately instead of posting a
+// silently stale total.
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
   if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
-    const dataDir = env.AGENT_VIEWER_DATA_DIR;
-    if (!dataDir || !fs.existsSync(path.join(dataDir, "sessions.db"))) {
-      throw new Error("no existing AgentsView snapshot for configured extra home under launchd");
-    }
-  } else {
-    syncAgentsviewOrThrow(bin, timeoutMs, env);
+    throw new Error("configured extra homes require an out-of-launchd AgentsView refresh");
   }
+  syncAgentsviewOrThrow(bin, timeoutMs, env);
   return queryAgent(bin, since, agent, timeoutMs, env);
 }

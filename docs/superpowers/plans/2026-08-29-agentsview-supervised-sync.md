@@ -110,8 +110,8 @@ retain its `boolean` return and existing log message exactly in behavior.
 
 Change `collectAgentsviewAgentOnly` to call
 `syncAgentsviewOrThrow(bin, timeoutMs, env)`, then perform a `--no-sync` query.
-For the installed launchd job, skip the deadlocking write, require an existing
-isolated snapshot, and read it with the same `--no-sync` query.
+For the installed launchd job, fail configured extra-home collection
+immediately rather than enter the deadlocking write or post a stale snapshot.
 
 - [ ] **Step 5: Run the focused test and verify GREEN**
 
