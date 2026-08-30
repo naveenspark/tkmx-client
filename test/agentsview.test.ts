@@ -361,32 +361,16 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
   });
 
   it("fails immediately without syncing under reporter launchd", () => {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-launchd-"));
     const previousServiceName = process.env.XPC_SERVICE_NAME;
     try {
-      const calls = path.join(tmp, "calls.log");
-      const bin = path.join(tmp, "fake-agentsview");
-      writeExec(bin, `#!/bin/sh
-echo "$*" >> "${calls}"
-if [ "$1" = "sync" ]; then exit 99; fi
-echo '{"daily":[]}'
-`);
-      const dataDir = path.join(tmp, "index");
-      fs.mkdirSync(dataDir);
-      fs.writeFileSync(path.join(dataDir, "sessions.db"), "snapshot");
       process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
-
       assert.throws(
-        () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {
-          AGENT_VIEWER_DATA_DIR: dataDir,
-        }),
+        () => collectAgentsviewAgentOnly("/must-not-run", "20260829", "codex", {}),
         /configured extra homes require an out-of-launchd AgentsView refresh/,
       );
-      assert.equal(fs.existsSync(calls), false);
     } finally {
       if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
       else process.env.XPC_SERVICE_NAME = previousServiceName;
-      fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
 
