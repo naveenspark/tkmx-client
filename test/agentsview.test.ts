@@ -367,16 +367,22 @@ describe("collectAgentsviewAgentOnly strict isolated sync", () => {
       const bin = path.join(tmp, "fake-agentsview");
       writeExec(bin, `#!/bin/sh
 printf 'NO_DAEMON=%s|WARP_DIR=%s|DATA=%s|SOURCE=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$WARP_DIR" "$AGENT_VIEWER_DATA_DIR" "$CODEX_SESSIONS_DIR" "$*" >> "${calls}"
-if [ "$1" = "sync" ]; then exit 0; fi
+if [ "$1" = "sync" ]; then sleep 0.5; exit 0; fi
 echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-sol","inputTokens":10,"outputTokens":2}]}]}'
 `);
       const dataDir = path.join(tmp, "index");
       const sourceDir = path.join(tmp, "codex", "sessions");
 
-      const result = collectAgentsviewAgentOnly(bin, "20260829", "codex", {
-        AGENT_VIEWER_DATA_DIR: dataDir,
-        CODEX_SESSIONS_DIR: sourceDir,
-      });
+      const result = collectAgentsviewAgentOnly(
+        bin,
+        "20260829",
+        "codex",
+        {
+          AGENT_VIEWER_DATA_DIR: dataDir,
+          CODEX_SESSIONS_DIR: sourceDir,
+        },
+        250,
+      );
 
       assert.equal(result[0].modelBreakdowns[0].totalTokens, 12);
       const lines = fs.readFileSync(calls, "utf-8").trim().split("\n");
@@ -421,7 +427,14 @@ echo '{"daily":[]}'
 `);
 
         assert.throws(
-          () => collectAgentsviewAgentOnly(bin, "20260829", "codex", {}, testCase.timeoutMs),
+          () => collectAgentsviewAgentOnly(
+            bin,
+            "20260829",
+            "codex",
+            {},
+            180000,
+            testCase.timeoutMs,
+          ),
           testCase.errorPattern,
           testCase.name,
         );
