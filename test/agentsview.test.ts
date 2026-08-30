@@ -155,6 +155,17 @@ function withFakeAgentsview(
   }
 }
 
+function withLaunchdEnvironment(fn: () => void): void {
+  const previous = process.env.XPC_SERVICE_NAME;
+  process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+  try {
+    fn();
+  } finally {
+    if (previous === undefined) delete process.env.XPC_SERVICE_NAME;
+    else process.env.XPC_SERVICE_NAME = previous;
+  }
+}
+
 describe("collectAgentsviewUsage local agents", () => {
   it("collects whatever agents the index holds, syncing once first", () => {
     // `hermes` is the point: it's not one of the four this used to name, and
@@ -198,9 +209,7 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
   // be read at all, so "never synced" stays a loud abort rather than a POST
   // of zero usage dressed up as a quiet day.
   it("still reports last-synced data when a launchd sync fails", () => {
-    const previousServiceName = process.env.XPC_SERVICE_NAME;
-    try {
-      process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+    withLaunchdEnvironment(() => {
       withFakeAgentsview(
         ["claude"],
         (tmp) => `#!/bin/sh
@@ -218,10 +227,7 @@ echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputT
           assert.ok(lines.length > 1, "reads continue after the sync failed");
         },
       );
-    } finally {
-      if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
-      else process.env.XPC_SERVICE_NAME = previousServiceName;
-    }
+    });
   });
 
   it("fails instead of reading stale data when direct sync fails outside launchd", () => {
@@ -390,17 +396,12 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
   });
 
   it("fails immediately without syncing under reporter launchd", () => {
-    const previousServiceName = process.env.XPC_SERVICE_NAME;
-    try {
-      process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+    withLaunchdEnvironment(() => {
       assert.throws(
         () => collectAgentsviewAgentOnly("/must-not-run", "20260829", "codex", {}),
         /configured extra homes require an out-of-launchd AgentsView refresh/,
       );
-    } finally {
-      if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
-      else process.env.XPC_SERVICE_NAME = previousServiceName;
-    }
+    });
   });
 
   it("throws on strict sync errors without querying usage", () => {
