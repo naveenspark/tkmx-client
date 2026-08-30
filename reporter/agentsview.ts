@@ -296,6 +296,29 @@ export function syncAgentsview(
   timeoutMs: number = 90000,
   extraEnv?: Record<string, string>,
 ): boolean {
+  const execOpts = syncExecOptions(timeoutMs, extraEnv, false);
+  try {
+    execFileSync(bin, ["sync"], execOpts);
+    return true;
+  } catch (err) {
+    const detail = syncFailureDetail(err);
+    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
+    return false;
+  }
+}
+
+function syncExecOptions(
+  timeoutMs: number,
+  extraEnv: Record<string, string> | undefined,
+  direct: boolean,
+): Parameters<typeof execFileSync>[2] {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...extraEnv,
+    WARP_DIR: WARP_SKIP_DIR,
+  };
+  if (direct) env.AGENTSVIEW_NO_DAEMON = "1";
+
   const execOpts: Parameters<typeof execFileSync>[2] = {
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -311,16 +334,25 @@ export function syncAgentsview(
     // next-largest history outgrows. stderr stays piped so the catch below
     // still logs a real failure's message.
     stdio: ["ignore", "ignore", "pipe"],
-    env: { ...process.env, ...extraEnv, WARP_DIR: WARP_SKIP_DIR },
+    env,
   };
+  return execOpts;
+}
+
+function syncFailureDetail(err: unknown): string {
+  const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+  return stderr || errMessage(err);
+}
+
+export function syncAgentsviewOrThrow(
+  bin: string,
+  timeoutMs: number = 180000,
+  extraEnv?: Record<string, string>,
+): void {
   try {
-    execFileSync(bin, ["sync"], execOpts);
-    return true;
+    execFileSync(bin, ["sync"], syncExecOptions(timeoutMs, extraEnv, true));
   } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    const detail = stderr || errMessage(err);
-    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
-    return false;
+    throw new Error(`agentsview sync failed: ${syncFailureDetail(err)}`);
   }
 }
 
@@ -355,11 +387,12 @@ export function collectAgentsviewUsage(
 // starts empty, so a swallowed sync failure here would read zero rows and the
 // run would POST a TOTAL silently missing a home the operator explicitly
 // configured — the partial-total-as-success failure that a configured home is
-// made fatal to prevent. A home that can't be collected aborts the run instead.
-// That keeps the syncing (non---no-sync) read on this path, which is the one
-// shape that can hit the launchd deadlock; aborting loudly is the intended
-// outcome there, not a regression.
+// made fatal to prevent. Sync is a separate direct-write operation because a
+// daemon auto-start can outlive AgentsView's fixed readiness window on a large
+// archive, especially when a service manager reaps the daemon after every run.
+// Only a successful strict sync reaches the no-sync usage read.
 export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
   const since = toIsoDate(sinceStr);
-  return queryAgent(bin, since, agent, false, timeoutMs, env);
+  syncAgentsviewOrThrow(bin, timeoutMs, env);
+  return queryAgent(bin, since, agent, true, timeoutMs, env);
 }
