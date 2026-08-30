@@ -232,6 +232,7 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
 // The syncing calls below carry the guard; reads always use --no-sync.
 const WARP_SKIP_DIR = "/var/empty";
+const LOCAL_DIRECT_SYNC_TIMEOUT_MS = 60 * 60 * 1000;
 
 function queryAgent(
   bin: string,
@@ -257,8 +258,8 @@ function queryAgent(
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
 
-// Refresh agentsview's local index as a standalone, time-boxed, best-effort
-// step — kept deliberately separate from the read queries below.
+// Refresh agentsview's local index as a standalone, time-boxed step — kept
+// deliberately separate from the read queries below.
 //
 // Standalone also because discovery needs it: discoverAgents reads the index,
 // so an agent whose first session landed since the last sync has to be written
@@ -277,16 +278,17 @@ function queryAgent(
 // (the symptom that motivated this change).
 //
 // So we ALWAYS read with --no-sync (deadlock-free) and run sync on its own:
-//   - Interactive runs, Linux/systemd, and Macs that don't hit the deadlock
-//     sync successfully → fully fresh data.
-//   - Macs where launchd sync deadlocks: the timeout reaps the hung sync and
-//     we report the last successfully-synced snapshot instead of nothing.
-// Best-effort here does NOT open the silent-skip hole, because discoverAgents
+//   - Outside launchd, sync writes directly without daemon startup. It is
+//     strict and gets a long budget because schema upgrades can rebuild very
+//     large indexes before the report reads them.
+//   - Under launchd, the timeout reaps the deadlocked sync and we report the
+//     last successfully-synced snapshot instead of nothing.
+// Best-effort under launchd does NOT open the silent-skip hole, because discoverAgents
 // still throws when the index can't be read at all: a machine that has never
 // synced aborts loudly rather than POSTing zero usage as a quiet day. The
 // degradation is bounded to "stale snapshot", never "no snapshot".
-// The report can no longer hang or silently fail on the sync. A shorter
-// default timeout bounds the wasted wall-clock when sync does deadlock; an
+// The report can no longer hang or silently fail on launchd sync. A shorter
+// default timeout bounds the wasted wall-clock when launchd sync deadlocks; an
 // incremental sync is near-instant and a cold full sync is rare. WARP_DIR is
 // pointed at an empty dir here (see WARP_SKIP_DIR) because this is the syncing
 // path that would otherwise block on Warp's Full-Disk-Access-gated sqlite.
@@ -360,7 +362,11 @@ export function collectAgentsviewUsage(
   sinceStr: string,
   timeoutMs: number = 180000,
 ): AgentsviewUsageByAgent {
-  syncAgentsview(bin);
+  if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
+    syncAgentsview(bin);
+  } else {
+    syncAgentsviewOrThrow(bin, LOCAL_DIRECT_SYNC_TIMEOUT_MS);
+  }
 
   const since = toIsoDate(sinceStr);
   // The one sync pass above covers every agent: agentsview's syncAllLocked

@@ -155,6 +155,17 @@ function withFakeAgentsview(
   }
 }
 
+function withLaunchdEnvironment(fn: () => void): void {
+  const previous = process.env.XPC_SERVICE_NAME;
+  process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+  try {
+    fn();
+  } finally {
+    if (previous === undefined) delete process.env.XPC_SERVICE_NAME;
+    else process.env.XPC_SERVICE_NAME = previous;
+  }
+}
+
 describe("collectAgentsviewUsage local agents", () => {
   it("collects whatever agents the index holds, syncing once first", () => {
     // `hermes` is the point: it's not one of the four this used to name, and
@@ -168,7 +179,7 @@ for arg in "$@"; do
   if [ "$prev" = "--agent" ]; then agent="$arg"; fi
   prev="$arg"
 done
-echo "$*" >> "${path.join(tmp, "calls.log")}"
+printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then exit 0; fi
 printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
 `,
@@ -180,7 +191,7 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
         assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
 
         const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.equal(lines[0], "sync", "sync runs before discovery reads the index");
+        assert.equal(lines[0], "NO_DAEMON=1|sync", "direct sync runs before discovery reads the index");
         const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
         assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
         for (const line of lines.slice(1)) {
@@ -197,22 +208,46 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
   // the other side by discoverAgents, which still throws when the index can't
   // be read at all, so "never synced" stays a loud abort rather than a POST
   // of zero usage dressed up as a quiet day.
-  it("still reports last-synced data when the sync itself fails", () => {
-    withFakeAgentsview(
-      ["claude"],
-      (tmp) => `#!/bin/sh
+  it("still reports last-synced data when a launchd sync fails", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => `#!/bin/sh
 echo "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then echo "spawnSync ETIMEDOUT" >&2; exit 1; fi
 echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
 `,
+        (fakeBin, tmp) => {
+          const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+
+          assert.equal(usageByAgent.claude[0].date, "2026-05-01");
+
+          const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
+          assert.equal(lines[0], "sync", "sync was attempted");
+          assert.ok(lines.length > 1, "reads continue after the sync failed");
+        },
+      );
+    });
+  });
+
+  it("fails instead of reading stale data when direct sync fails outside launchd", () => {
+    withFakeAgentsview(
+      ["claude"],
+      (tmp) => `#!/bin/sh
+echo "$*" >> "${path.join(tmp, "calls.log")}"
+if [ "$1" = "sync" ]; then echo "rebuild failed" >&2; exit 1; fi
+echo '{"daily":[]}'
+`,
       (fakeBin, tmp) => {
-        const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
-
-        assert.equal(usageByAgent.claude[0].date, "2026-05-01");
-
-        const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.equal(lines[0], "sync", "sync was attempted");
-        assert.ok(lines.length > 1, "reads continue after the sync failed");
+        assert.throws(
+          () => collectAgentsviewUsage(fakeBin, "20260501"),
+          /agentsview sync failed: rebuild failed/,
+        );
+        assert.equal(
+          fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim(),
+          "sync",
+          "a failed direct sync must not reach stale reads",
+        );
       },
     );
   });
@@ -361,17 +396,12 @@ echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-so
   });
 
   it("fails immediately without syncing under reporter launchd", () => {
-    const previousServiceName = process.env.XPC_SERVICE_NAME;
-    try {
-      process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+    withLaunchdEnvironment(() => {
       assert.throws(
         () => collectAgentsviewAgentOnly("/must-not-run", "20260829", "codex", {}),
         /configured extra homes require an out-of-launchd AgentsView refresh/,
       );
-    } finally {
-      if (previousServiceName === undefined) delete process.env.XPC_SERVICE_NAME;
-      else process.env.XPC_SERVICE_NAME = previousServiceName;
-    }
+    });
   });
 
   it("throws on strict sync errors without querying usage", () => {
