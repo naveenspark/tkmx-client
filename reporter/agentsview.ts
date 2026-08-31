@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { errMessage } from "./errors";
+import { LAUNCHD_LABEL } from "./install";
 import Database from "better-sqlite3";
 import type { DailyUsage, ModelBreakdown } from "./usage";
 
@@ -229,24 +230,23 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // the parser, so they're untouched.
 // Living on the query (not the OS-unit env) means existing installs get the
 // fix on a plain `npm install` rebuild, with no daemon-unit regeneration.
-// The only syncing call is now syncAgentsview() below; the guard in
-// queryAgent stays as defense in case a caller ever syncs there.
+// The syncing calls below carry the guard; reads always use --no-sync.
 const WARP_SKIP_DIR = "/var/empty";
+const DIRECT_SYNC_TIMEOUT_MS = 60 * 60 * 1000;
 
 function queryAgent(
   bin: string,
   since: string,
   agent: string,
-  noSync: boolean,
   timeoutMs: number,
   extraEnv?: Record<string, string>,
 ): DailyUsage[] {
-  const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since];
-  if (noSync) args.push("--no-sync");
-  const execOpts: Parameters<typeof execFileSync>[2] = { encoding: "utf-8", timeout: timeoutMs };
-  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
-  if (!noSync) env.WARP_DIR = WARP_SKIP_DIR;
-  execOpts.env = env;
+  const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since, "--no-sync"];
+  const execOpts: Parameters<typeof execFileSync>[2] = {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    env: { ...process.env, ...extraEnv },
+  };
   let raw: string;
   try {
     raw = execFileSync(bin, args, execOpts) as string;
@@ -258,8 +258,8 @@ function queryAgent(
   return parseAgentsviewOutput(JSON.parse(raw), agent);
 }
 
-// Refresh agentsview's local index as a standalone, time-boxed, best-effort
-// step — kept deliberately separate from the read queries below.
+// Refresh agentsview's local index as a standalone, time-boxed step — kept
+// deliberately separate from the read queries below.
 //
 // Standalone also because discovery needs it: discoverAgents reads the index,
 // so an agent whose first session landed since the last sync has to be written
@@ -278,16 +278,17 @@ function queryAgent(
 // (the symptom that motivated this change).
 //
 // So we ALWAYS read with --no-sync (deadlock-free) and run sync on its own:
-//   - Interactive runs, Linux/systemd, and Macs that don't hit the deadlock
-//     sync successfully → fully fresh data.
-//   - Macs where launchd sync deadlocks: the timeout reaps the hung sync and
-//     we report the last successfully-synced snapshot instead of nothing.
-// Best-effort here does NOT open the silent-skip hole, because discoverAgents
+//   - Outside launchd, sync writes directly without daemon startup. It is
+//     strict and gets a long budget because schema upgrades can rebuild very
+//     large indexes before the report reads them.
+//   - Under launchd, the timeout reaps the deadlocked sync and we report the
+//     last successfully-synced snapshot instead of nothing.
+// Best-effort under launchd does NOT open the silent-skip hole, because discoverAgents
 // still throws when the index can't be read at all: a machine that has never
 // synced aborts loudly rather than POSTing zero usage as a quiet day. The
 // degradation is bounded to "stale snapshot", never "no snapshot".
-// The report can no longer hang or silently fail on the sync. A shorter
-// default timeout bounds the wasted wall-clock when sync does deadlock; an
+// The report can no longer hang or silently fail on launchd sync. A shorter
+// default timeout bounds the wasted wall-clock when launchd sync deadlocks; an
 // incremental sync is near-instant and a cold full sync is rare. WARP_DIR is
 // pointed at an empty dir here (see WARP_SKIP_DIR) because this is the syncing
 // path that would otherwise block on Warp's Full-Disk-Access-gated sqlite.
@@ -296,6 +297,29 @@ export function syncAgentsview(
   timeoutMs: number = 90000,
   extraEnv?: Record<string, string>,
 ): boolean {
+  const execOpts = syncExecOptions(timeoutMs, extraEnv, false);
+  try {
+    execFileSync(bin, ["sync"], execOpts);
+    return true;
+  } catch (err) {
+    const detail = syncFailureDetail(err);
+    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
+    return false;
+  }
+}
+
+function syncExecOptions(
+  timeoutMs: number,
+  extraEnv: Record<string, string> | undefined,
+  direct: boolean,
+): Parameters<typeof execFileSync>[2] {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...extraEnv,
+    WARP_DIR: WARP_SKIP_DIR,
+  };
+  if (direct) env.AGENTSVIEW_NO_DAEMON = "1";
+
   const execOpts: Parameters<typeof execFileSync>[2] = {
     encoding: "utf-8",
     timeout: timeoutMs,
@@ -311,16 +335,25 @@ export function syncAgentsview(
     // next-largest history outgrows. stderr stays piped so the catch below
     // still logs a real failure's message.
     stdio: ["ignore", "ignore", "pipe"],
-    env: { ...process.env, ...extraEnv, WARP_DIR: WARP_SKIP_DIR },
+    env,
   };
+  return execOpts;
+}
+
+function syncFailureDetail(err: unknown): string {
+  const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+  return stderr || errMessage(err);
+}
+
+export function syncAgentsviewOrThrow(
+  bin: string,
+  timeoutMs: number = 180000,
+  extraEnv?: Record<string, string>,
+): void {
   try {
-    execFileSync(bin, ["sync"], execOpts);
-    return true;
+    execFileSync(bin, ["sync"], syncExecOptions(timeoutMs, extraEnv, true));
   } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    const detail = stderr || errMessage(err);
-    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
-    return false;
+    throw new Error(`agentsview sync failed: ${syncFailureDetail(err)}`);
   }
 }
 
@@ -329,7 +362,11 @@ export function collectAgentsviewUsage(
   sinceStr: string,
   timeoutMs: number = 180000,
 ): AgentsviewUsageByAgent {
-  syncAgentsview(bin);
+  if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
+    syncAgentsview(bin);
+  } else {
+    syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS);
+  }
 
   const since = toIsoDate(sinceStr);
   // The one sync pass above covers every agent: agentsview's syncAllLocked
@@ -339,7 +376,7 @@ export function collectAgentsviewUsage(
   // hit the launchd sync deadlock.
   const usageByAgent: AgentsviewUsageByAgent = {};
   for (const agent of discoverAgents()) {
-    usageByAgent[agent] = queryAgent(bin, since, agent, true, timeoutMs);
+    usageByAgent[agent] = queryAgent(bin, since, agent, timeoutMs);
   }
   return usageByAgent;
 }
@@ -355,11 +392,26 @@ export function collectAgentsviewUsage(
 // starts empty, so a swallowed sync failure here would read zero rows and the
 // run would POST a TOTAL silently missing a home the operator explicitly
 // configured — the partial-total-as-success failure that a configured home is
-// made fatal to prevent. A home that can't be collected aborts the run instead.
-// That keeps the syncing (non---no-sync) read on this path, which is the one
-// shape that can hit the launchd deadlock; aborting loudly is the intended
-// outcome there, not a regression.
-export function collectAgentsviewAgentOnly(bin: string, sinceStr: string, agent: string, env: Record<string, string>, timeoutMs: number = 180000): DailyUsage[] {
+// made fatal to prevent. Sync is a separate direct-write operation because a
+// daemon auto-start can outlive AgentsView's fixed readiness window on a large
+// archive, especially when a service manager reaps the daemon after every run.
+// Only a successful strict sync reaches the no-sync usage read. The installed
+// launchd job is the exception: AgentsView writes deadlock in that spawn
+// context, and an old snapshot is not evidence that a configured home is
+// current, so configured extra homes fail immediately instead of posting a
+// silently stale total.
+export function collectAgentsviewAgentOnly(
+  bin: string,
+  sinceStr: string,
+  agent: string,
+  env: Record<string, string>,
+  timeoutMs: number = 180000,
+  syncTimeoutMs: number = DIRECT_SYNC_TIMEOUT_MS,
+): DailyUsage[] {
   const since = toIsoDate(sinceStr);
-  return queryAgent(bin, since, agent, false, timeoutMs, env);
+  if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
+    throw new Error("configured extra homes require an out-of-launchd AgentsView refresh");
+  }
+  syncAgentsviewOrThrow(bin, syncTimeoutMs, env);
+  return queryAgent(bin, since, agent, timeoutMs, env);
 }

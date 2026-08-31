@@ -219,6 +219,8 @@ Your [profile page](https://aiworthusing.com/builder-index) shows how many machi
 
 If you already sync `~/.claude` from other machines to a central location (e.g. via rsync, Syncthing, or a tool like [engineering-notebook](https://github.com/obra/engineering-notebook)), you can aggregate all of them into a single report without installing the client on each machine. Set `EXTRA_CLAUDE_CONFIGS` in `.env` to a comma-separated list of directories, each containing a `projects/` subdirectory of Claude Code JSONL sessions:
 
+> **macOS:** configured extra homes are not supported inside the installed launchd job because AgentsView cannot safely refresh their isolated databases there. Scheduled reports fail loudly while any `EXTRA_*_CONFIGS` value is configured; run `npm run report` interactively, outside launchd, to collect them.
+
 ```
 EXTRA_CLAUDE_CONFIGS=/path/to/synced-laptop,/path/to/synced-desktop
 ```

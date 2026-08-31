@@ -4,8 +4,17 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as fs from "node:fs";
 
-import { parseAgentsviewOutput, toIsoDate, collectAgentsviewUsage, discoverAgents, syncAgentsview, resolveAgentsviewWith } from "../reporter/agentsview";
+import {
+  parseAgentsviewOutput,
+  toIsoDate,
+  collectAgentsviewUsage,
+  collectAgentsviewAgentOnly,
+  discoverAgents,
+  syncAgentsview,
+  resolveAgentsviewWith,
+} from "../reporter/agentsview";
 import { writeFakeIndex } from "./fake-index";
+import { LAUNCHD_LABEL } from "../reporter/install";
 
 // Write an executable fixture (default: a no-op shell stub) and mark it +x.
 function writeExec(p, body = "#!/bin/sh\n") {
@@ -146,6 +155,17 @@ function withFakeAgentsview(
   }
 }
 
+function withLaunchdEnvironment(fn: () => void): void {
+  const previous = process.env.XPC_SERVICE_NAME;
+  process.env.XPC_SERVICE_NAME = LAUNCHD_LABEL;
+  try {
+    fn();
+  } finally {
+    if (previous === undefined) delete process.env.XPC_SERVICE_NAME;
+    else process.env.XPC_SERVICE_NAME = previous;
+  }
+}
+
 describe("collectAgentsviewUsage local agents", () => {
   it("collects whatever agents the index holds, syncing once first", () => {
     // `hermes` is the point: it's not one of the four this used to name, and
@@ -159,7 +179,7 @@ for arg in "$@"; do
   if [ "$prev" = "--agent" ]; then agent="$arg"; fi
   prev="$arg"
 done
-echo "$*" >> "${path.join(tmp, "calls.log")}"
+printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then exit 0; fi
 printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
 `,
@@ -171,7 +191,7 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
         assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
 
         const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.equal(lines[0], "sync", "sync runs before discovery reads the index");
+        assert.equal(lines[0], "NO_DAEMON=1|sync", "direct sync runs before discovery reads the index");
         const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
         assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
         for (const line of lines.slice(1)) {
@@ -188,22 +208,46 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
   // the other side by discoverAgents, which still throws when the index can't
   // be read at all, so "never synced" stays a loud abort rather than a POST
   // of zero usage dressed up as a quiet day.
-  it("still reports last-synced data when the sync itself fails", () => {
-    withFakeAgentsview(
-      ["claude"],
-      (tmp) => `#!/bin/sh
+  it("still reports last-synced data when a launchd sync fails", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => `#!/bin/sh
 echo "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then echo "spawnSync ETIMEDOUT" >&2; exit 1; fi
 echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
 `,
+        (fakeBin, tmp) => {
+          const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
+
+          assert.equal(usageByAgent.claude[0].date, "2026-05-01");
+
+          const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
+          assert.equal(lines[0], "sync", "sync was attempted");
+          assert.ok(lines.length > 1, "reads continue after the sync failed");
+        },
+      );
+    });
+  });
+
+  it("fails instead of reading stale data when direct sync fails outside launchd", () => {
+    withFakeAgentsview(
+      ["claude"],
+      (tmp) => `#!/bin/sh
+echo "$*" >> "${path.join(tmp, "calls.log")}"
+if [ "$1" = "sync" ]; then echo "rebuild failed" >&2; exit 1; fi
+echo '{"daily":[]}'
+`,
       (fakeBin, tmp) => {
-        const usageByAgent = collectAgentsviewUsage(fakeBin, "20260501") as any;
-
-        assert.equal(usageByAgent.claude[0].date, "2026-05-01");
-
-        const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.equal(lines[0], "sync", "sync was attempted");
-        assert.ok(lines.length > 1, "reads continue after the sync failed");
+        assert.throws(
+          () => collectAgentsviewUsage(fakeBin, "20260501"),
+          /agentsview sync failed: rebuild failed/,
+        );
+        assert.equal(
+          fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim(),
+          "sync",
+          "a failed direct sync must not reach stale reads",
+        );
       },
     );
   });
@@ -312,6 +356,93 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
         }
       },
     );
+  });
+});
+
+describe("collectAgentsviewAgentOnly strict isolated sync", () => {
+  it("direct-syncs the isolated home before reading it with --no-sync", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+    try {
+      const calls = path.join(tmp, "calls.log");
+      const bin = path.join(tmp, "fake-agentsview");
+      writeExec(bin, `#!/bin/sh
+printf 'NO_DAEMON=%s|WARP_DIR=%s|DATA=%s|SOURCE=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$WARP_DIR" "$AGENT_VIEWER_DATA_DIR" "$CODEX_SESSIONS_DIR" "$*" >> "${calls}"
+if [ "$1" = "sync" ]; then sleep 0.5; exit 0; fi
+echo '{"daily":[{"date":"2026-08-29","modelBreakdowns":[{"modelName":"gpt-5.6-sol","inputTokens":10,"outputTokens":2}]}]}'
+`);
+      const dataDir = path.join(tmp, "index");
+      const sourceDir = path.join(tmp, "codex", "sessions");
+
+      const result = collectAgentsviewAgentOnly(
+        bin,
+        "20260829",
+        "codex",
+        {
+          AGENT_VIEWER_DATA_DIR: dataDir,
+          CODEX_SESSIONS_DIR: sourceDir,
+        },
+        250,
+      );
+
+      assert.equal(result[0].modelBreakdowns[0].totalTokens, 12);
+      const lines = fs.readFileSync(calls, "utf-8").trim().split("\n");
+      assert.equal(lines.length, 2);
+      assert.equal(
+        lines[0],
+        `NO_DAEMON=1|WARP_DIR=/var/empty|DATA=${dataDir}|SOURCE=${sourceDir}|sync`,
+      );
+      assert.match(lines[1], new RegExp(
+        `^NO_DAEMON=\\|WARP_DIR=\\|DATA=${dataDir}\\|SOURCE=${sourceDir}\\|usage daily `,
+      ));
+      assert.match(lines[1], /--agent codex/);
+      assert.match(lines[1], /--no-sync$/);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("fails immediately without syncing under reporter launchd", () => {
+    withLaunchdEnvironment(() => {
+      assert.throws(
+        () => collectAgentsviewAgentOnly("/must-not-run", "20260829", "codex", {}),
+        /configured extra homes require an out-of-launchd AgentsView refresh/,
+      );
+    });
+  });
+
+  it("throws on strict sync errors without querying usage", () => {
+    const cases = [
+      { name: "non-zero exit", syncBody: "echo boom >&2; exit 1", timeoutMs: 180000, errorPattern: /agentsview sync failed: boom/ },
+      { name: "timeout", syncBody: "exec sleep 30", timeoutMs: 1000, errorPattern: /agentsview sync failed: .*ETIMEDOUT/ },
+    ];
+    for (const testCase of cases) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-extra-sync-"));
+      try {
+        const calls = path.join(tmp, "calls.log");
+        const bin = path.join(tmp, "fake-agentsview");
+        writeExec(bin, `#!/bin/sh
+echo "$*" >> "${calls}"
+if [ "$1" = "sync" ]; then ${testCase.syncBody}; fi
+echo '{"daily":[]}'
+`);
+
+        assert.throws(
+          () => collectAgentsviewAgentOnly(
+            bin,
+            "20260829",
+            "codex",
+            {},
+            180000,
+            testCase.timeoutMs,
+          ),
+          testCase.errorPattern,
+          testCase.name,
+        );
+        assert.deepEqual(fs.readFileSync(calls, "utf-8").trim().split("\n"), ["sync"]);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
   });
 });
 
