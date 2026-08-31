@@ -88,7 +88,7 @@ let since = "";
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--since") since = args[i + 1] || "";
 }
-console.log(JSON.stringify({ schema_version: 1, window: { days_arg: since }, totals: { sessions_all: 7 }, generated_at: "2026-04-24T00:00:00Z" }));
+console.log(JSON.stringify({ schema_version: 1, window: { days: since === "28d" ? 28 : 0, transcript: "TRANSCRIPT_SENTINEL_E2E" }, totals: { sessions_all: 7 }, generated_at: "2026-04-24T00:00:00Z", transcript: "TRANSCRIPT_SENTINEL_E2E" }));
 process.exit(0);
 `,
     );
@@ -135,7 +135,7 @@ case "$1" in
         SINCE="\${!j}"
       fi
     done
-    printf '{"schema_version":1,"window":{"days_arg":"%s"},"totals":{"sessions_all":7},"generated_at":"2026-04-24T00:00:00Z"}\\n' "$SINCE"
+    printf '{"schema_version":1,"window":{"days":28,"transcript":"TRANSCRIPT_SENTINEL_E2E"},"totals":{"sessions_all":7},"generated_at":"2026-04-24T00:00:00Z","transcript":"TRANSCRIPT_SENTINEL_E2E"}\\n'
     ;;
   *)
     echo "unexpected: $*" >&2
@@ -266,9 +266,14 @@ test("REPORT_DAYS=1 still invokes agentsview with --since 28d for session_stats"
       );
     }
     assert.equal(
-      captured.session_stats?.window?.days_arg,
-      "28d",
+      captured.session_stats?.window?.days,
+      28,
       "POSTed session_stats should reflect the 28d window that agentsview was asked for",
+    );
+    assert.doesNotMatch(
+      JSON.stringify(captured),
+      /TRANSCRIPT_SENTINEL_E2E/,
+      "the final POST body must exclude transcript-shaped Agentsview fields",
     );
     assert.equal(captured.report_days, 1);
   } finally {
@@ -483,8 +488,8 @@ test("inactive day (no usage rows) still posts and still refreshes session_stats
       "session_stats should still be collected and sent on an inactive day",
     );
     assert.equal(
-      captured.session_stats.window?.days_arg,
-      "28d",
+      captured.session_stats.window?.days,
+      28,
       "session_stats must still reflect the 28d window, not REPORT_DAYS=1",
     );
     // Sanity: stats invocation still happened despite no usage rows.
