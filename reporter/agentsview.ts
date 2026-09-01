@@ -248,6 +248,10 @@ export function parseAgentsviewOutput(parsed: AgentsviewJson, source: string): D
 // The syncing calls below carry the guard; reads always use --no-sync.
 const WARP_SKIP_DIR = "/var/empty";
 const DIRECT_SYNC_TIMEOUT_MS = 60 * 60 * 1000;
+const SYNC_BUSY_RETRY_MS = 1000;
+const SYNC_RETRY_SIGNAL = new Int32Array(
+  new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+);
 
 function queryAgent(
   bin: string,
@@ -313,15 +317,33 @@ export function syncAgentsview(
   timeoutMs: number = 90000,
   extraEnv?: Record<string, string>,
 ): boolean {
-  const execOpts = syncExecOptions(timeoutMs, extraEnv, false);
-  try {
-    execFileSync(bin, ["sync"], execOpts);
-    return true;
-  } catch (err) {
-    const detail = syncFailureDetail(err);
-    console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
-    return false;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      execFileSync(
+        bin,
+        ["sync"],
+        syncExecOptions(Math.max(1, deadline - Date.now()), extraEnv, false),
+      );
+      return true;
+    } catch (err) {
+      const detail = syncFailureDetail(err);
+      // A cold daemon can briefly hold its sync mutex for startup work. Wait
+      // within the existing deadline so the report reads the completed refresh
+      // instead of immediately falling back to an older snapshot.
+      if (detail.includes("sync already in progress")) {
+        const waitMs = Math.min(SYNC_BUSY_RETRY_MS, deadline - Date.now());
+        if (waitMs > 0) {
+          Atomics.wait(SYNC_RETRY_SIGNAL, 0, 0, waitMs);
+          continue;
+        }
+      }
+      console.error(`  agentsview sync skipped (${detail}); reading last-synced data`);
+      return false;
+    }
   }
+  console.error("  agentsview sync skipped (retry deadline exceeded); reading last-synced data");
+  return false;
 }
 
 function syncExecOptions(

@@ -367,6 +367,30 @@ describe("syncAgentsview", () => {
     }
   });
 
+  it("waits through transient daemon contention and returns the fresh sync", () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-sync-"));
+    try {
+      const bin = path.join(tmp, "fake-agentsview");
+      const attempts = path.join(tmp, "attempts");
+      writeExec(bin, `#!/bin/sh
+attempt=0
+if [ -f "${attempts}" ]; then attempt=$(cat "${attempts}"); fi
+attempt=$((attempt + 1))
+printf '%s' "$attempt" > "${attempts}"
+if [ "$attempt" -eq 1 ]; then
+  echo '{"error":"sync already in progress"}' >&2
+  exit 1
+fi
+exit 0
+`);
+
+      assert.equal(syncAgentsview(bin, 2500), true);
+      assert.equal(fs.readFileSync(attempts, "utf-8"), "2");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it("returns false (no throw) when sync hangs past the timeout", () => {
     // Mirrors the macOS launchd deadlock: the sync never returns, so the
     // timeout must SIGKILL it and we fall through to a read instead of
