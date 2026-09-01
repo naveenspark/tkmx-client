@@ -10,6 +10,7 @@ import {
   collectAgentsviewUsage,
   collectAgentsviewAgentOnly,
   discoverAgents,
+  reportingAgentsviewEnv,
   syncAgentsview,
   resolveAgentsviewWith,
 } from "../reporter/agentsview";
@@ -30,6 +31,31 @@ describe("toIsoDate", () => {
 
   it("preserves single-digit months and days", () => {
     assert.equal(toIsoDate("20260101"), "2026-01-01");
+  });
+});
+
+describe("reportingAgentsviewEnv", () => {
+  it("uses a dedicated usage-only archive for Builder Index reporting", () => {
+    assert.deepEqual(
+      reportingAgentsviewEnv({ HOME: "/Users/example" } as NodeJS.ProcessEnv),
+      {
+        AGENTSVIEW_DATA_DIR: "/Users/example/.agentsview-builder-index",
+        AGENTSVIEW_USAGE_ONLY: "1",
+      },
+    );
+  });
+
+  it("allows an explicit reporting archive path", () => {
+    assert.deepEqual(
+      reportingAgentsviewEnv({
+        HOME: "/Users/example",
+        AGENTSVIEW_REPORTING_DATA_DIR: "/private/reporting-index",
+      } as NodeJS.ProcessEnv),
+      {
+        AGENTSVIEW_DATA_DIR: "/private/reporting-index",
+        AGENTSVIEW_USAGE_ONLY: "1",
+      },
+    );
   });
 });
 
@@ -133,7 +159,8 @@ describe("parseAgentsviewOutput", () => {
 
 // Every collectAgentsviewUsage case needs the same scaffold: a temp dir
 // standing in for the AgentsView data dir, a fake index inside it, a fake
-// agentsview binary, and AGENTSVIEW_DATA_DIR pointed there for the duration.
+// agentsview binary, and AGENTSVIEW_REPORTING_DATA_DIR pointed there for the
+// duration.
 // `script` takes the dir so a fake that logs its calls can write inside it.
 function withFakeAgentsview(
   agents: string[],
@@ -141,16 +168,19 @@ function withFakeAgentsview(
   fn: (fakeBin: string, tmp: string) => void,
 ): void {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-agentsview-"));
-  const origDataDir = process.env.AGENTSVIEW_DATA_DIR;
+  const origDataDir = process.env.AGENTSVIEW_REPORTING_DATA_DIR;
   try {
     writeFakeIndex(tmp, agents);
-    process.env.AGENTSVIEW_DATA_DIR = tmp;
+    process.env.AGENTSVIEW_REPORTING_DATA_DIR = tmp;
     const fakeBin = path.join(tmp, "agentsview");
     writeExec(fakeBin, script(tmp));
     fn(fakeBin, tmp);
   } finally {
-    if (origDataDir === undefined) delete process.env.AGENTSVIEW_DATA_DIR;
-    else process.env.AGENTSVIEW_DATA_DIR = origDataDir;
+    if (origDataDir === undefined) {
+      delete process.env.AGENTSVIEW_REPORTING_DATA_DIR;
+    } else {
+      process.env.AGENTSVIEW_REPORTING_DATA_DIR = origDataDir;
+    }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
@@ -179,7 +209,7 @@ for arg in "$@"; do
   if [ "$prev" = "--agent" ]; then agent="$arg"; fi
   prev="$arg"
 done
-printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
+printf 'NO_DAEMON=%s|DATA=%s|USAGE_ONLY=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$AGENTSVIEW_DATA_DIR" "$AGENTSVIEW_USAGE_ONLY" "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then exit 0; fi
 printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model","inputTokens":10,"outputTokens":2}]}]}\\n' "$agent"
 `,
@@ -191,11 +221,16 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
         assert.equal(usageByAgent.claude[0].modelBreakdowns[0].source, "claude");
 
         const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.equal(lines[0], "NO_DAEMON=1|sync", "direct sync runs before discovery reads the index");
+        assert.equal(
+          lines[0],
+          `NO_DAEMON=1|DATA=${tmp}|USAGE_ONLY=1|sync`,
+          "direct sync uses the dedicated compact archive before discovery",
+        );
         const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
         assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
         for (const line of lines.slice(1)) {
           assert.ok(line.includes("--no-sync"), `usage call should skip sync: ${line}`);
+          assert.ok(line.includes(`DATA=${tmp}|USAGE_ONLY=1|`), `usage call should use compact archive: ${line}`);
         }
       },
     );
@@ -341,18 +376,21 @@ describe("collectAgentsviewUsage WARP_DIR scoping", () => {
     withFakeAgentsview(
       ["claude", "codex"],
       (tmp) =>
-        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|$*" >> "${path.join(tmp, "calls.log")}"\necho '{"daily":[]}'\n`,
+        `#!/bin/sh\necho "WARP_DIR=\${WARP_DIR}|DATA=\${AGENTSVIEW_DATA_DIR}|USAGE_ONLY=\${AGENTSVIEW_USAGE_ONLY}|$*" >> "${path.join(tmp, "calls.log")}"\necho '{"daily":[]}'\n`,
       (fakeBin, tmp) => {
         collectAgentsviewUsage(fakeBin, "20260501");
 
         const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-        assert.match(lines[0], /^WARP_DIR=\/var\/empty\|sync$/);
+        assert.equal(
+          lines[0],
+          `WARP_DIR=/var/empty|DATA=${tmp}|USAGE_ONLY=1|sync`,
+        );
 
         for (const agent of ["claude", "codex"]) {
           const line = lines.find((l) => l.includes(`--agent ${agent}`));
           assert.ok(line, `missing ${agent} call`);
           assert.ok(line.includes("--no-sync"), `${agent} call should pass --no-sync`);
-          assert.doesNotMatch(line, /WARP_DIR=\/var\/empty\|/);
+          assert.match(line, new RegExp(`^WARP_DIR=\\|DATA=${tmp}\\|USAGE_ONLY=1\\|`));
         }
       },
     );

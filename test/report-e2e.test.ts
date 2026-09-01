@@ -73,7 +73,7 @@ const args = process.argv.slice(1);
 const cmd = path.basename(args[0] || "");
 if (cmd !== "usage" && cmd !== "stats" && cmd !== "sync") return;
 args[0] = cmd;
-const envCols = ["CODEX_SESSIONS_DIR", "CLAUDE_PROJECTS_DIR", "PIEBALD_DIR", "OPENCODE_DIR", "AGENT_VIEWER_DATA_DIR"].map((k) => k + "=" + (process.env[k] || ""));
+const envCols = ["CODEX_SESSIONS_DIR", "CLAUDE_PROJECTS_DIR", "PIEBALD_DIR", "OPENCODE_DIR", "AGENT_VIEWER_DATA_DIR", "AGENTSVIEW_DATA_DIR", "AGENTSVIEW_USAGE_ONLY"].map((k) => k + "=" + (process.env[k] || ""));
 fs.appendFileSync(${JSON.stringify(argvLog)}, args.concat(envCols).join("\\t") + "\\n");
 if (cmd === "sync") { process.exit(0); }
 if (cmd === "usage") {
@@ -104,7 +104,7 @@ FAIL_USAGE_ENV_VALUE=${shQuote(failUsageEnvValue)}`;
     `#!/usr/bin/env bash
 ${failUsageConfig}
 printf '%s\\t' "$@" >> "${argvLog}"
-printf 'CODEX_SESSIONS_DIR=%s\\tCLAUDE_PROJECTS_DIR=%s\\tPIEBALD_DIR=%s\\tOPENCODE_DIR=%s\\tAGENT_VIEWER_DATA_DIR=%s\\t' "$CODEX_SESSIONS_DIR" "$CLAUDE_PROJECTS_DIR" "$PIEBALD_DIR" "$OPENCODE_DIR" "$AGENT_VIEWER_DATA_DIR" >> "${argvLog}"
+printf 'CODEX_SESSIONS_DIR=%s\\tCLAUDE_PROJECTS_DIR=%s\\tPIEBALD_DIR=%s\\tOPENCODE_DIR=%s\\tAGENT_VIEWER_DATA_DIR=%s\\tAGENTSVIEW_DATA_DIR=%s\\tAGENTSVIEW_USAGE_ONLY=%s\\t' "$CODEX_SESSIONS_DIR" "$CLAUDE_PROJECTS_DIR" "$PIEBALD_DIR" "$OPENCODE_DIR" "$AGENT_VIEWER_DATA_DIR" "$AGENTSVIEW_DATA_DIR" "$AGENTSVIEW_USAGE_ONLY" >> "${argvLog}"
 printf '\\n' >> "${argvLog}"
 case "$1" in
   sync)
@@ -156,7 +156,7 @@ async function setupE2E({ dailyJson, failUsageEnvKey = "", failUsageEnvValue = "
   // baseEnv sets HOME to tmp, so discoverAgents() reads this index rather than
   // the developer's real one — which would otherwise make these assertions
   // depend on whichever agents the machine running the suite happens to have.
-  writeFakeIndex(path.join(tmp, ".agentsview"), indexAgents);
+  writeFakeIndex(path.join(tmp, ".agentsview-builder-index"), indexAgents);
   const argvLog = path.join(tmp, "argv.log");
   const fakeScript = path.join(tmp, process.platform === "win32" ? "fake-agentsview-preload.cjs" : "fake-agentsview");
   writeFakeAgentsview(fakeScript, argvLog, dailyJson, failUsageEnvKey, failUsageEnvValue);
@@ -254,6 +254,22 @@ test("REPORT_DAYS=1 still invokes agentsview with --since 28d for session_stats"
 
     const argvLines = fs.readFileSync(ctx.argvLog, "utf-8").trim().split("\n");
     const statsInvocations = argvLines.filter((l) => l.startsWith("stats\t"));
+    const reportingDataDir = path.join(
+      ctx.baseEnv.HOME, ".agentsview-builder-index",
+    );
+    const reportingInvocations = argvLines.filter(
+      (l) => l.startsWith("sync\t") || l.startsWith("usage\t"),
+    );
+    for (const line of reportingInvocations) {
+      assert.ok(
+        line.includes(`AGENTSVIEW_DATA_DIR=${reportingDataDir}`),
+        `reporting invocation should use ${reportingDataDir}: ${line}`,
+      );
+      assert.ok(
+        line.includes("AGENTSVIEW_USAGE_ONLY=1"),
+        `reporting invocation should use usage-only storage: ${line}`,
+      );
+    }
     assert.ok(
       statsInvocations.length >= 1,
       `expected at least one 'stats' invocation, got ${argvLines.join(" | ")}`,

@@ -146,6 +146,21 @@ interface AgentsviewJson {
 
 export type AgentsviewUsageByAgent = Record<string, DailyUsage[]>;
 
+// Builder Index needs usage accounting, not a second transcript viewer. Keep
+// its index physically separate from the normal AgentsView archive so usage
+// reporting stays compact and cannot change the archive used by the UI.
+export function reportingAgentsviewEnv(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const home = env.HOME || env.USERPROFILE || "";
+  return {
+    AGENTSVIEW_DATA_DIR:
+      env.AGENTSVIEW_REPORTING_DATA_DIR
+      || path.join(home, ".agentsview-builder-index"),
+    AGENTSVIEW_USAGE_ONLY: "1",
+  };
+}
+
 // Which agents to collect comes from the local index, not a list in this file.
 // AgentsView grows parsers between releases — 0.25 already handles copilot,
 // gemini, cursor, iflow and amp beyond the four this used to name — and a
@@ -362,10 +377,11 @@ export function collectAgentsviewUsage(
   sinceStr: string,
   timeoutMs: number = 180000,
 ): AgentsviewUsageByAgent {
+  const reportingEnv = reportingAgentsviewEnv();
   if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
-    syncAgentsview(bin);
+    syncAgentsview(bin, 90000, reportingEnv);
   } else {
-    syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS);
+    syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS, reportingEnv);
   }
 
   const since = toIsoDate(sinceStr);
@@ -375,8 +391,10 @@ export function collectAgentsviewUsage(
   // copilot, etc. Every read below then runs with --no-sync so none of them can
   // hit the launchd sync deadlock.
   const usageByAgent: AgentsviewUsageByAgent = {};
-  for (const agent of discoverAgents()) {
-    usageByAgent[agent] = queryAgent(bin, since, agent, timeoutMs);
+  for (const agent of discoverAgents({ ...process.env, ...reportingEnv })) {
+    usageByAgent[agent] = queryAgent(
+      bin, since, agent, timeoutMs, reportingEnv,
+    );
   }
   return usageByAgent;
 }
