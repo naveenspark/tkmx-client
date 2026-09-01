@@ -286,24 +286,19 @@ function queryAgent(
 // so an agent whose first session landed since the last sync has to be written
 // before we look.
 //
-// Why not fold sync into the query (the old behavior)? agentsview's data
-// sync — any write path, including a bare `agentsview sync` — DEADLOCKS when
-// the reporter runs under macOS launchd: the writer hangs forever inside
-// sqlite3_open_v2 (0% CPU, all goroutines parked) while read-only queries
-// (`--no-sync`) are completely unaffected. It is intrinsic to launchd's
-// spawn context, not the environment: it reproduces across agentsview
-// versions and survives ProcessType=Interactive, login-shell wrappers, a
-// fully-replicated launchd env, raised rlimits, and GOMAXPROCS=1. A query
-// that triggers sync therefore hangs until its timeout SIGKILLs it, the
-// transaction rolls back, and the report fails outright — every 2h, forever
-// (the symptom that motivated this change).
+// Why not fold sync into the query (the old behavior)? A direct AgentsView
+// writer can deadlock under macOS launchd while read-only queries (`--no-sync`)
+// remain unaffected. Keeping refresh separate lets launchd use AgentsView's
+// daemon-backed writer and keeps every usage read read-only.
 //
 // So we ALWAYS read with --no-sync (deadlock-free) and run sync on its own:
 //   - Outside launchd, sync writes directly without daemon startup. It is
 //     strict and gets a long budget because schema upgrades can rebuild very
 //     large indexes before the report reads them.
-//   - Under launchd, the timeout reaps the deadlocked sync and we report the
-//     last successfully-synced snapshot instead of nothing.
+//   - Under launchd, sync clears any inherited direct-mode override and uses
+//     the daemon transport. If that refresh still fails, its bounded timeout
+//     preserves the last successfully-synced snapshot instead of losing the
+//     entire report.
 // Best-effort under launchd does NOT open the silent-skip hole, because discoverAgents
 // still throws when the index can't be read at all: a machine that has never
 // synced aborts loudly rather than POSTing zero usage as a quiet day. The
@@ -339,7 +334,13 @@ function syncExecOptions(
     ...extraEnv,
     WARP_DIR: WARP_SKIP_DIR,
   };
-  if (direct) env.AGENTSVIEW_NO_DAEMON = "1";
+  if (direct) {
+    env.AGENTSVIEW_NO_DAEMON = "1";
+  } else {
+    // Agent shells set this globally. A launchd refresh needs AgentsView's
+    // daemon-backed writer because its direct writer can deadlock there.
+    delete env.AGENTSVIEW_NO_DAEMON;
+  }
 
   const execOpts: Parameters<typeof execFileSync>[2] = {
     encoding: "utf-8",

@@ -259,7 +259,7 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
       withFakeAgentsview(
         ["claude"],
         (tmp) => `#!/bin/sh
-echo "$*" >> "${path.join(tmp, "calls.log")}"
+printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
 if [ "$1" = "sync" ]; then echo "spawnSync ETIMEDOUT" >&2; exit 1; fi
 echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
 `,
@@ -269,7 +269,11 @@ echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputT
           assert.equal(usageByAgent.claude[0].date, "2026-05-01");
 
           const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
-          assert.equal(lines[0], "sync", "sync was attempted");
+          assert.equal(
+            lines[0],
+            "NO_DAEMON=|sync",
+            "launchd sync must use daemon transport even when the parent shell disables it",
+          );
           assert.ok(lines.length > 1, "reads continue after the sync failed");
         },
       );
