@@ -257,10 +257,16 @@ function queryAgent(
   extraEnv?: Record<string, string>,
 ): DailyUsage[] {
   const args = ["usage", "daily", "--json", "--breakdown", "--agent", agent, "--since", since, "--no-sync"];
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  // AGENTSVIEW_NO_DAEMON=1 is useful for the preceding direct sync, but
+  // current AgentsView intentionally rejects direct SQLite reads for this
+  // command. Agent shells may set it globally, so scope it away here and let
+  // the supported query transport start or reuse the local daemon.
+  delete env.AGENTSVIEW_NO_DAEMON;
   const execOpts: Parameters<typeof execFileSync>[2] = {
     encoding: "utf-8",
     timeout: timeoutMs,
-    env: { ...process.env, ...extraEnv },
+    env,
   };
   let raw: string;
   try {

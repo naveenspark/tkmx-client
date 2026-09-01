@@ -169,9 +169,14 @@ function withFakeAgentsview(
 ): void {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "tkmx-agentsview-"));
   const origDataDir = process.env.AGENTSVIEW_REPORTING_DATA_DIR;
+  const origNoDaemon = process.env.AGENTSVIEW_NO_DAEMON;
   try {
     writeFakeIndex(tmp, agents);
     process.env.AGENTSVIEW_REPORTING_DATA_DIR = tmp;
+    // Reproduce agent shells that globally disable daemon autostart. Sync
+    // needs direct mode, while read commands need that ambient override
+    // removed so AgentsView can open its supported query transport.
+    process.env.AGENTSVIEW_NO_DAEMON = "1";
     const fakeBin = path.join(tmp, "agentsview");
     writeExec(fakeBin, script(tmp));
     fn(fakeBin, tmp);
@@ -180,6 +185,11 @@ function withFakeAgentsview(
       delete process.env.AGENTSVIEW_REPORTING_DATA_DIR;
     } else {
       process.env.AGENTSVIEW_REPORTING_DATA_DIR = origDataDir;
+    }
+    if (origNoDaemon === undefined) {
+      delete process.env.AGENTSVIEW_NO_DAEMON;
+    } else {
+      process.env.AGENTSVIEW_NO_DAEMON = origNoDaemon;
     }
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -229,6 +239,7 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
         const agents = lines.slice(1).map((line) => line.match(/--agent ([^ ]+)/)?.[1]);
         assert.deepEqual(agents.sort(), ["claude", "codex", "hermes"]);
         for (const line of lines.slice(1)) {
+          assert.ok(line.startsWith("NO_DAEMON=|"), `usage read should allow daemon transport: ${line}`);
           assert.ok(line.includes("--no-sync"), `usage call should skip sync: ${line}`);
           assert.ok(line.includes(`DATA=${tmp}|USAGE_ONLY=1|`), `usage call should use compact archive: ${line}`);
         }
