@@ -259,6 +259,7 @@ const SYNC_RETRY_SIGNAL = new Int32Array(
 const DAEMON_STOP_TIMEOUT_MS = 15000;
 
 interface AgentsviewDaemonLease {
+  capture(): void;
   close(): void;
 }
 
@@ -276,13 +277,6 @@ function daemonExecOptions(
   };
 }
 
-function daemonStartedPid(output: string): number | null {
-  const match = output.match(/^Starting agentsview \(pid (\d+)\)\.\.\.$/m);
-  if (!match) return null;
-  const pid = Number(match[1]);
-  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
-}
-
 function daemonStatusPids(output: string): number[] {
   return [...output.matchAll(/^\s*pid:\s+(\d+)\s*$/gm)]
     .map((match) => Number(match[1]))
@@ -290,18 +284,20 @@ function daemonStatusPids(output: string): number[] {
 }
 
 // launchd cannot safely use AgentsView's direct writer, so the scheduled
-// reporter needs a daemon for sync and read commands. `daemon start` says
-// whether this invocation launched the process. Only that exact PID is stopped
-// after collection; a pre-existing or replacement daemon belongs to someone
-// else and stays running.
-function acquireAgentsviewDaemon(
+// reporter lets `agentsview sync` auto-start a daemon with its private
+// skip-initial-sync handoff. The foreground sync then owns the first archive
+// pass instead of racing a normal daemon startup pass. When there was no daemon
+// before sync, capture the one that appears afterward and stop only that exact
+// PID after collection. A pre-existing or replacement daemon belongs to
+// someone else and stays running.
+function trackAgentsviewDaemon(
   bin: string,
-  timeoutMs: number,
   extraEnv: Record<string, string>,
 ): AgentsviewDaemonLease {
-  const noLease = (): AgentsviewDaemonLease => ({ close() {} });
+  const noLease = (): AgentsviewDaemonLease => ({ capture() {}, close() {} });
   const dataDir = extraEnv.AGENTSVIEW_DATA_DIR;
   let before = "";
+  let stoppedBeforeSync = false;
   try {
     before = execFileSync(
       bin,
@@ -316,37 +312,42 @@ function acquireAgentsviewDaemon(
       console.error(`  agentsview daemon ownership unknown (status failed: ${errMessage(err)})`);
       return noLease();
     }
+    stoppedBeforeSync = true;
   }
-  if (before) {
-    if (daemonStatusPids(before).length > 0) return noLease();
-    if (!/^No agentsview daemon is running\.\s*$/m.test(before)) {
-      return noLease();
-    }
-  }
+  if (daemonStatusPids(before).length > 0) return noLease();
+  stoppedBeforeSync ||= /^No agentsview daemon is running\.\s*$/m.test(before);
+  if (!stoppedBeforeSync) return noLease();
 
-  let output: string;
-  try {
-    output = execFileSync(
-      bin,
-      ["daemon", "start"],
-      daemonExecOptions(timeoutMs, extraEnv),
-    ) as string;
-  } catch (err) {
-    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
-    const detail = stderr ? `: ${stderr}` : `: ${errMessage(err)}`;
-    throw new Error(`agentsview daemon start failed${detail}`);
-  }
-
-  const startedPid = daemonStartedPid(output);
-  if (startedPid === null) {
-    return noLease();
-  }
-
+  let startedPid: number | null = null;
   let closed = false;
+  const capture = (): void => {
+    if (closed || startedPid !== null) return;
+    let status: string;
+    try {
+      status = execFileSync(
+        bin,
+        ["daemon", "status"],
+        daemonExecOptions(DAEMON_STOP_TIMEOUT_MS, extraEnv),
+      ) as string;
+    } catch (err) {
+      console.error(`  agentsview daemon ownership unknown after sync (status failed: ${errMessage(err)})`);
+      return;
+    }
+    const pids = daemonStatusPids(status);
+    if (pids.length === 1) {
+      startedPid = pids[0];
+    } else if (pids.length > 1) {
+      console.error(`  agentsview daemon ownership unknown after sync (current pids ${pids.join(", ")})`);
+    }
+  };
+
   return {
+    capture,
     close(): void {
       if (closed) return;
+      capture();
       closed = true;
+      if (startedPid === null) return;
 
       let status: string;
       try {
@@ -538,11 +539,12 @@ export function collectAgentsviewUsage(
   const reportingEnv = reportingAgentsviewEnv();
   const scheduled = process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL;
   const daemon = scheduled
-    ? acquireAgentsviewDaemon(bin, 90000, reportingEnv)
+    ? trackAgentsviewDaemon(bin, reportingEnv)
     : null;
   try {
     if (scheduled) {
       syncAgentsview(bin, 90000, reportingEnv);
+      daemon?.capture();
     } else {
       syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS, reportingEnv);
     }

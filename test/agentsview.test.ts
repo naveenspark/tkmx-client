@@ -365,7 +365,7 @@ exit 2
 `;
   }
 
-  it("stops the dedicated daemon it starts", () => {
+  it("stops the dedicated daemon started by sync", () => {
     withLaunchdEnvironment(() => {
       withFakeAgentsview(
         ["claude"],
@@ -376,7 +376,11 @@ exit 2
           assert.equal(fs.existsSync(path.join(tmp, "daemon.pid")), false);
           assert.equal(fs.readFileSync(path.join(tmp, "daemon.stopped"), "utf-8"), "4242");
           const calls = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8");
-          assert.match(calls, /^daemon start$/m);
+          assert.doesNotMatch(
+            calls,
+            /^daemon start$/m,
+            "sync must own startup so the foreground request drives the first pass",
+          );
           assert.match(calls, /^daemon stop$/m);
         },
       );
@@ -410,7 +414,7 @@ exit 2
           collectAgentsviewUsage(fakeBin, "20260501");
           assert.equal(fs.readFileSync(path.join(tmp, "daemon.pid"), "utf-8"), "4343");
           const calls = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8");
-          assert.match(calls, /^daemon start$/m);
+          assert.doesNotMatch(calls, /^daemon start$/m);
           assert.doesNotMatch(calls, /^daemon stop$/m);
         },
       );
