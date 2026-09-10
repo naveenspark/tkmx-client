@@ -306,7 +306,7 @@ function trackAgentsviewDaemon(
     ) as string;
   } catch (err) {
     // A brand-new reporting archive has no config or runtime record yet.
-    // `daemon start` owns creating it. For an existing directory, an unreadable
+    // `agentsview sync` owns creating it. For an existing directory, an unreadable
     // status is ambiguous, so leave lifecycle ownership with the other process.
     if (!dataDir || fs.existsSync(dataDir)) {
       console.error(`  agentsview daemon ownership unknown (status failed: ${errMessage(err)})`);
