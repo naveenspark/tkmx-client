@@ -157,6 +157,10 @@ export function reportingAgentsviewEnv(
     AGENTSVIEW_DATA_DIR:
       env.AGENTSVIEW_REPORTING_DATA_DIR
       || path.join(home, ".agentsview-builder-index"),
+    // Current AgentsView names the storage policy directly. Keep the legacy
+    // flag alongside it while Builder Index machines roll forward from the
+    // pre-merge canary that introduced usage-only storage.
+    AGENTSVIEW_ARCHIVE_CONTENT: "usage",
     AGENTSVIEW_USAGE_ONLY: "1",
   };
 }
@@ -252,6 +256,131 @@ const SYNC_BUSY_RETRY_MS = 1000;
 const SYNC_RETRY_SIGNAL = new Int32Array(
   new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
 );
+const DAEMON_STOP_TIMEOUT_MS = 15000;
+
+interface AgentsviewDaemonLease {
+  close(): void;
+}
+
+function daemonExecOptions(
+  timeoutMs: number,
+  extraEnv: Record<string, string>,
+): Parameters<typeof execFileSync>[2] {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+  delete env.AGENTSVIEW_NO_DAEMON;
+  return {
+    encoding: "utf-8",
+    timeout: timeoutMs,
+    killSignal: "SIGKILL",
+    env,
+  };
+}
+
+function daemonStartedPid(output: string): number | null {
+  const match = output.match(/^Starting agentsview \(pid (\d+)\)\.\.\.$/m);
+  if (!match) return null;
+  const pid = Number(match[1]);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
+}
+
+function daemonStatusPids(output: string): number[] {
+  return [...output.matchAll(/^\s*pid:\s+(\d+)\s*$/gm)]
+    .map((match) => Number(match[1]))
+    .filter((pid) => Number.isSafeInteger(pid) && pid > 0);
+}
+
+// launchd cannot safely use AgentsView's direct writer, so the scheduled
+// reporter needs a daemon for sync and read commands. `daemon start` says
+// whether this invocation launched the process. Only that exact PID is stopped
+// after collection; a pre-existing or replacement daemon belongs to someone
+// else and stays running.
+function acquireAgentsviewDaemon(
+  bin: string,
+  timeoutMs: number,
+  extraEnv: Record<string, string>,
+): AgentsviewDaemonLease {
+  const noLease = (): AgentsviewDaemonLease => ({ close() {} });
+  const dataDir = extraEnv.AGENTSVIEW_DATA_DIR;
+  let before = "";
+  try {
+    before = execFileSync(
+      bin,
+      ["daemon", "status"],
+      daemonExecOptions(DAEMON_STOP_TIMEOUT_MS, extraEnv),
+    ) as string;
+  } catch (err) {
+    // A brand-new reporting archive has no config or runtime record yet.
+    // `daemon start` owns creating it. For an existing directory, an unreadable
+    // status is ambiguous, so leave lifecycle ownership with the other process.
+    if (!dataDir || fs.existsSync(dataDir)) {
+      console.error(`  agentsview daemon ownership unknown (status failed: ${errMessage(err)})`);
+      return noLease();
+    }
+  }
+  if (before) {
+    if (daemonStatusPids(before).length > 0) return noLease();
+    if (!/^No agentsview daemon is running\.\s*$/m.test(before)) {
+      return noLease();
+    }
+  }
+
+  let output: string;
+  try {
+    output = execFileSync(
+      bin,
+      ["daemon", "start"],
+      daemonExecOptions(timeoutMs, extraEnv),
+    ) as string;
+  } catch (err) {
+    const stderr = (err as { stderr?: Buffer }).stderr?.toString().trim() || "";
+    const detail = stderr ? `: ${stderr}` : `: ${errMessage(err)}`;
+    throw new Error(`agentsview daemon start failed${detail}`);
+  }
+
+  const startedPid = daemonStartedPid(output);
+  if (startedPid === null) {
+    return noLease();
+  }
+
+  let closed = false;
+  return {
+    close(): void {
+      if (closed) return;
+      closed = true;
+
+      let status: string;
+      try {
+        status = execFileSync(
+          bin,
+          ["daemon", "status"],
+          daemonExecOptions(DAEMON_STOP_TIMEOUT_MS, extraEnv),
+        ) as string;
+      } catch (err) {
+        console.error(`  agentsview daemon cleanup skipped (status failed: ${errMessage(err)})`);
+        return;
+      }
+
+      const pids = daemonStatusPids(status);
+      if (pids.length === 0) return;
+      if (pids.length !== 1 || pids[0] !== startedPid) {
+        console.error(
+          `  agentsview daemon cleanup skipped (started pid ${startedPid}; current pid${pids.length === 1 ? "" : "s"} ${pids.join(", ")})`,
+        );
+        return;
+      }
+
+      try {
+        execFileSync(
+          bin,
+          ["daemon", "stop"],
+          daemonExecOptions(DAEMON_STOP_TIMEOUT_MS, extraEnv),
+        );
+      } catch (err) {
+        console.error(`  agentsview daemon cleanup failed: ${errMessage(err)}`);
+      }
+    },
+  };
+}
 
 function queryAgent(
   bin: string,
@@ -407,25 +536,33 @@ export function collectAgentsviewUsage(
   timeoutMs: number = 180000,
 ): AgentsviewUsageByAgent {
   const reportingEnv = reportingAgentsviewEnv();
-  if (process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL) {
-    syncAgentsview(bin, 90000, reportingEnv);
-  } else {
-    syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS, reportingEnv);
-  }
+  const scheduled = process.env.XPC_SERVICE_NAME === LAUNCHD_LABEL;
+  const daemon = scheduled
+    ? acquireAgentsviewDaemon(bin, 90000, reportingEnv)
+    : null;
+  try {
+    if (scheduled) {
+      syncAgentsview(bin, 90000, reportingEnv);
+    } else {
+      syncAgentsviewOrThrow(bin, DIRECT_SYNC_TIMEOUT_MS, reportingEnv);
+    }
 
-  const since = toIsoDate(sinceStr);
-  // The one sync pass above covers every agent: agentsview's syncAllLocked
-  // (internal/sync/engine.go) iterates parser.Registry in a single pass, so a
-  // standalone `agentsview sync` picks up claude, codex, pi, opencode, gemini,
-  // copilot, etc. Every read below then runs with --no-sync so none of them can
-  // hit the launchd sync deadlock.
-  const usageByAgent: AgentsviewUsageByAgent = {};
-  for (const agent of discoverAgents({ ...process.env, ...reportingEnv })) {
-    usageByAgent[agent] = queryAgent(
-      bin, since, agent, timeoutMs, reportingEnv,
-    );
+    const since = toIsoDate(sinceStr);
+    // The one sync pass above covers every agent: agentsview's syncAllLocked
+    // (internal/sync/engine.go) iterates parser.Registry in a single pass, so a
+    // standalone `agentsview sync` picks up claude, codex, pi, opencode, gemini,
+    // copilot, etc. Every read below then runs with --no-sync so none of them can
+    // hit the launchd sync deadlock.
+    const usageByAgent: AgentsviewUsageByAgent = {};
+    for (const agent of discoverAgents({ ...process.env, ...reportingEnv })) {
+      usageByAgent[agent] = queryAgent(
+        bin, since, agent, timeoutMs, reportingEnv,
+      );
+    }
+    return usageByAgent;
+  } finally {
+    daemon?.close();
   }
-  return usageByAgent;
 }
 
 // Single-agent collection against an isolated agentsview data dir. Used for

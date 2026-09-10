@@ -40,6 +40,7 @@ describe("reportingAgentsviewEnv", () => {
       reportingAgentsviewEnv({ HOME: "/Users/example" } as NodeJS.ProcessEnv),
       {
         AGENTSVIEW_DATA_DIR: "/Users/example/.agentsview-builder-index",
+        AGENTSVIEW_ARCHIVE_CONTENT: "usage",
         AGENTSVIEW_USAGE_ONLY: "1",
       },
     );
@@ -53,6 +54,7 @@ describe("reportingAgentsviewEnv", () => {
       } as NodeJS.ProcessEnv),
       {
         AGENTSVIEW_DATA_DIR: "/private/reporting-index",
+        AGENTSVIEW_ARCHIVE_CONTENT: "usage",
         AGENTSVIEW_USAGE_ONLY: "1",
       },
     );
@@ -260,6 +262,15 @@ printf '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"%s-model
         ["claude"],
         (tmp) => `#!/bin/sh
 printf 'NO_DAEMON=%s|%s\n' "$AGENTSVIEW_NO_DAEMON" "$*" >> "${path.join(tmp, "calls.log")}"
+if [ "$1" = "daemon" ] && [ "$2" = "status" ]; then
+  echo "agentsview running at http://127.0.0.1:8080"
+  echo "  pid:     7777"
+  exit 0
+fi
+if [ "$1" = "daemon" ] && [ "$2" = "start" ]; then
+  echo "agentsview already running at http://127.0.0.1:8080 (pid 7777)"
+  exit 0
+fi
 if [ "$1" = "sync" ]; then echo "spawnSync ETIMEDOUT" >&2; exit 1; fi
 echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
 `,
@@ -270,11 +281,11 @@ echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputT
 
           const lines = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8").trim().split("\n");
           assert.equal(
-            lines[0],
+            lines[1],
             "NO_DAEMON=|sync",
             "launchd sync must use daemon transport even when the parent shell disables it",
           );
-          assert.ok(lines.length > 1, "reads continue after the sync failed");
+          assert.ok(lines.length > 2, "reads continue after the sync failed");
         },
       );
     });
@@ -300,6 +311,127 @@ echo '{"daily":[]}'
         );
       },
     );
+  });
+});
+
+describe("collectAgentsviewUsage launchd daemon lifecycle", () => {
+  function lifecycleScript(
+    tmp: string,
+    replaceDuringUsage = false,
+    failUsage = false,
+  ): string {
+    const active = path.join(tmp, "daemon.pid");
+    const stopped = path.join(tmp, "daemon.stopped");
+    const calls = path.join(tmp, "calls.log");
+    return `#!/bin/sh
+echo "$*" >> "${calls}"
+if [ "$1" = "daemon" ] && [ "$2" = "start" ]; then
+  if [ -f "${active}" ]; then
+    pid=$(sed -n '1p' "${active}")
+    echo "agentsview already running at http://127.0.0.1:8080 (pid $pid)"
+  else
+    printf '4242' > "${active}"
+    echo "Starting agentsview (pid 4242)..."
+    echo "agentsview running at http://127.0.0.1:8080 (pid 4242)"
+  fi
+  exit 0
+fi
+if [ "$1" = "daemon" ] && [ "$2" = "status" ]; then
+  if [ -f "${active}" ]; then
+    pid=$(sed -n '1p' "${active}")
+    echo "agentsview running at http://127.0.0.1:8080"
+    echo "  pid:     $pid"
+  else
+    echo "No agentsview daemon is running."
+  fi
+  exit 0
+fi
+if [ "$1" = "daemon" ] && [ "$2" = "stop" ]; then
+  mv "${active}" "${stopped}"
+  exit 0
+fi
+if [ "$1" = "sync" ]; then
+  if [ ! -f "${active}" ]; then printf '4242' > "${active}"; fi
+  exit 0
+fi
+if [ "$1" = "usage" ]; then
+  ${replaceDuringUsage ? `printf '4343' > "${active}"` : ":"}
+  ${failUsage ? `echo "query failed" >&2
+  exit 1` : ""}
+  echo '{"daily":[{"date":"2026-05-01","modelBreakdowns":[{"modelName":"m","inputTokens":10,"outputTokens":2}]}]}'
+  exit 0
+fi
+exit 2
+`;
+  }
+
+  it("stops the dedicated daemon it starts", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => lifecycleScript(tmp),
+        (fakeBin, tmp) => {
+          const usage = collectAgentsviewUsage(fakeBin, "20260501") as any;
+          assert.equal(usage.claude[0].date, "2026-05-01");
+          assert.equal(fs.existsSync(path.join(tmp, "daemon.pid")), false);
+          assert.equal(fs.readFileSync(path.join(tmp, "daemon.stopped"), "utf-8"), "4242");
+          const calls = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8");
+          assert.match(calls, /^daemon start$/m);
+          assert.match(calls, /^daemon stop$/m);
+        },
+      );
+    });
+  });
+
+  it("leaves a daemon that was already running", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => lifecycleScript(tmp),
+        (fakeBin, tmp) => {
+          fs.writeFileSync(path.join(tmp, "daemon.pid"), "7777");
+          collectAgentsviewUsage(fakeBin, "20260501");
+          assert.equal(fs.readFileSync(path.join(tmp, "daemon.pid"), "utf-8"), "7777");
+          const calls = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8");
+          assert.match(calls, /^daemon status$/m);
+          assert.doesNotMatch(calls, /^daemon start$/m);
+          assert.doesNotMatch(calls, /^daemon stop$/m);
+        },
+      );
+    });
+  });
+
+  it("does not stop a replacement daemon with a different pid", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => lifecycleScript(tmp, true),
+        (fakeBin, tmp) => {
+          collectAgentsviewUsage(fakeBin, "20260501");
+          assert.equal(fs.readFileSync(path.join(tmp, "daemon.pid"), "utf-8"), "4343");
+          const calls = fs.readFileSync(path.join(tmp, "calls.log"), "utf-8");
+          assert.match(calls, /^daemon start$/m);
+          assert.doesNotMatch(calls, /^daemon stop$/m);
+        },
+      );
+    });
+  });
+
+  it("stops its daemon when usage collection fails", () => {
+    withLaunchdEnvironment(() => {
+      withFakeAgentsview(
+        ["claude"],
+        (tmp) => lifecycleScript(tmp, false, true),
+        (fakeBin, tmp) => {
+          assert.throws(
+            () => collectAgentsviewUsage(fakeBin, "20260501"),
+            /agentsview claude query failed: query failed/,
+          );
+          assert.equal(fs.existsSync(path.join(tmp, "daemon.pid")), false);
+          assert.equal(fs.readFileSync(path.join(tmp, "daemon.stopped"), "utf-8"), "4242");
+        },
+      );
+    });
   });
 });
 
