@@ -22,6 +22,32 @@ Preserve `.env`, especially `CLIENT_ID`. Keep the configured reporting archive
 and pinned AgentsView binary. Use the existing tool-update policy; recovery is
 not an automatic upgrade. Avoid running a manual backfill alongside the job.
 
+## Verify storage policy before a large refresh
+
+The reporter requests usage-only storage, but an already running AgentsView
+daemon uses the policy it loaded at startup. Client environment variables do
+not change that daemon's policy. In AgentsView v0.44.0, persist this top-level
+setting in the reporting data directory's `config.toml`:
+
+```toml
+archive_content = "usage"
+```
+
+Preserve the other configuration values. Before changing storage policy or
+restarting the identified reporting daemon, make a consistent SQLite backup
+and check its integrity. Do not copy just the live database file while WAL
+writes may be pending. Preserve the original transcripts.
+
+Restart the reporting daemon under the same data directory, then test one
+small, real source session that is absent from its archive. Compare the source
+token counts with the stored counts and verify that message and reasoning text
+are empty. A successful command against an unchanged, already imported file
+can return old rows without rewriting them; that does not test the new policy.
+
+The setting applies to subsequent writes. It does not compact existing rows
+or immediately reclaim database space. Keep historical cleanup separate from
+reporting recovery, and do not use a full rebuild or older binary as a shortcut.
+
 ## Refresh and backfill
 
 From this checkout, use the existing report command with a temporary window
