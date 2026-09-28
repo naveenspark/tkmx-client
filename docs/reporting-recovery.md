@@ -84,6 +84,13 @@ load-triggered report finishes, uploads successfully, and exits with code zero.
 Check archive freshness again and inspect the public profile. Loading the job
 does not by itself prove persistence across a future reboot.
 
+Also distinguish launchd's enabled state from macOS's **Allow in the Background**
+setting in Login Items & Extensions. [Upstream documents](https://github.com/plow-pbc/tkmx-client#profile-stopped-updating)
+that a disabled background item can prevent the next login from loading the job even when launchd reports
+the label as enabled. Record that setting as unverified if its inspection needs
+administrator authorization that was not granted; a successful current run does
+not resolve it.
+
 If the plist is missing or its paths are invalid, use the documented
 `npm run install-service` flow after reviewing its replacement plan. Never load
 another job or stop a pre-existing AgentsView daemon as incidental cleanup.
