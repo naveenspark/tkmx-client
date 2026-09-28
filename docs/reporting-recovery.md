@@ -40,8 +40,10 @@ writes may be pending. Preserve the original transcripts.
 
 Restart the reporting daemon under the same data directory, then test one
 small, real source session that is absent from its archive. Compare the source
-token counts with the stored counts and verify that message and reasoning text
-are empty. A successful command against an unchanged, already imported file
+token counts with the stored counts and verify that message text, reasoning,
+titles, and tool inputs/results are empty. Include a source with actual tool
+activity when checking tool payloads. Content-free delegation identifiers may
+remain. A successful command against an unchanged, already imported file
 can return old rows without rewriting them; that does not test the new policy.
 
 The setting applies to subsequent writes. It does not compact existing rows
