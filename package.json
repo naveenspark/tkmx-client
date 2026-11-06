@@ -15,7 +15,7 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^13.0.3",
     "dotenv": "^16.4.0"
   },
   "devDependencies": {
